@@ -1,0 +1,37 @@
+[
+    {
+        "id": "MedQA_1",
+        "predicted": "A",
+        "expected": "B",
+        "correct": false,
+        "iterations": 3
+    },
+    {
+        "id": "MedQA_2",
+        "predicted": "D",
+        "expected": "D",
+        "correct": true,
+        "iterations": 3
+    },
+    {
+        "id": "MedQA_3",
+        "predicted": "B",
+        "expected": "B",
+        "correct": true,
+        "iterations": 3
+    },
+    {
+        "id": "MedQA_4",
+        "predicted": "A",
+        "expected": "D",
+        "correct": false,
+        "iterations": 3
+    },
+    {
+        "id": "MedQA_5",
+        "predicted": "B",
+        "expected": "B",
+        "correct": true,
+        "iterations": 3
+    }
+]
