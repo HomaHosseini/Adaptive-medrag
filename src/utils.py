@@ -185,6 +185,9 @@ class Retriever:
         if not os.path.exists(self.db_dir):
             os.makedirs(self.db_dir)
         self.chunk_dir = os.path.join(self.db_dir, self.corpus_name, "chunk")
+
+
+
         if not os.path.exists(self.chunk_dir):
             print("Cloning the {:s} corpus from Huggingface...".format(self.corpus_name))
             os.system("git clone https://huggingface.co/datasets/MedRAG/{:s} {:s}".format(corpus_name, os.path.join(self.db_dir, self.corpus_name)))
@@ -380,6 +383,11 @@ class Retriever:
                 self.embedding_function = CustomizeSentenceTransformer(self.retriever_name, device="cuda" if torch.cuda.is_available() else "cpu")
             self.embedding_function.eval()
 
+            self.id_to_faiss = {
+                f"{metadata['source']}_{metadata['index']}": i
+                for i, metadata in enumerate(self.metadatas)
+            }
+
     def get_relevant_documents(self, question, k=32, id_only=False, **kwarg):
         assert type(question) == str
         question = [question]
@@ -411,6 +419,33 @@ class Retriever:
         '''
         return [json.loads(open(os.path.join(self.chunk_dir, i["source"]+".jsonl")).read().strip().split('\n')[i["index"]]) for i in indices]
 
+    def get_embeddings(self, document_ids):
+        """
+        Retrieve existing FAISS embeddings for document IDs.
+        """
+
+        rows = []
+        found_ids = []
+
+        for doc_id in document_ids:
+
+            row = self.id_to_faiss.get(doc_id)
+
+            if row is None:
+                continue
+
+            rows.append(row)
+            found_ids.append(doc_id)
+
+        if not rows:
+            return None, []
+
+        embeddings = np.vstack([
+            self.index.reconstruct(row)
+            for row in rows
+        ])
+
+        return embeddings, found_ids
 class RetrievalSystem:
 
     def __init__(self, retriever_name="MedCPT", corpus_name="Textbooks", db_dir="./corpus", HNSW=False, cache=False):
@@ -498,6 +533,31 @@ class RetrievalSystem:
             texts = [dict((key, item[1][key]) for key in ("id", "title", "content")) for item in RRF_list[:k]]
             scores = [item[1]["score"] for item in RRF_list[:k]]
         return texts, scores
+    def get_embeddings(self, document_ids):
+        """
+        Get embeddings from the underlying retriever.
+
+        Current experiment:
+            MedCPT + Textbooks
+        """
+
+        if len(self.retrievers) != 1:
+            raise NotImplementedError(
+                "Embedding extraction currently "
+                "supports one retriever."
+            )
+
+        if len(self.retrievers[0]) != 1:
+            raise NotImplementedError(
+                "Embedding extraction currently "
+                "supports one corpus."
+            )
+
+        retriever = self.retrievers[0][0]
+
+        return retriever.get_embeddings(
+            document_ids
+        )
     
 
 class DocExtracter:

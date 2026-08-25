@@ -1,16 +1,11 @@
-from medrag import MedRAG
+from .medrag import MedRAG
 import json
 import os
 import requests
 import re, ast
+from .evidence_tracker import EvidenceTracker
 
-
-def check_stopping_gate(
-    medrag_instance,
-    question,
-    context,
-    threshold=85
-):
+def check_stopping_gate(medrag_instance,question,context,threshold=85):
     """
     Question-only stopping gate.
 
@@ -197,6 +192,8 @@ def choose_query_budget(
 
     # Strong evidence, but not sufficient to stop.
     return 1
+
+
 class AdaptiveMedRAG(MedRAG):
 
     def adaptive_answer(self, question, options=None, k=32, rrf_k=100, save_path=None, max_iterations=4,  initial_queries=2,confidence_threshold=85, **kwargs):
@@ -210,9 +207,11 @@ class AdaptiveMedRAG(MedRAG):
 
         QUESTION_PROMPT = f"Here is the question:\n{question}\n\n{options_str}"
 
+        evidence_tracker = EvidenceTracker(
+            self.retrieval_system
+        )
         context = ""
         last_context = None
-        evidence_history = []
         saved_messages = [{"role": "system", "content": self.templates["i_medrag_system"]}]
 
         stop_flag = False
@@ -287,7 +286,7 @@ class AdaptiveMedRAG(MedRAG):
                 saved_messages.append(messages[-1])
 
                 # We return exactly how many iterations it took to prove early stopping!
-                return messages[-1]["content"], saved_messages, stopping_iteration ,confidence,query_budget_history, actual_query_count
+                return messages[-1]["content"], saved_messages, stopping_iteration ,confidence,query_budget_history, actual_query_count, evidence_tracker.history
 
             # --- EXTRACT QUERIES & RETRIEVE ---
             elif "## Queries" in last_content:
@@ -309,17 +308,34 @@ class AdaptiveMedRAG(MedRAG):
                     continue
 
                 # Retrieve documents for each query
-                iter_evidence = []
+                iteration_doc_ids = []
                 for q in action_list:
                     if q.strip() == "": continue
                     try:
-                        rag_result = self.medrag_answer(q, k=k, rrf_k=rrf_k, **kwargs)[0]
-                        iter_evidence.append(rag_result)
+                        rag_result, retrieved_snippets, scores = self.medrag_answer(q, k=k,rrf_k=rrf_k, **kwargs)
+                        for doc in retrieved_snippets:
+                            iteration_doc_ids.append(doc["id"])
                         context += f"\n\nQuery: {q}\nAnswer: {rag_result}"
                         context = context.strip()
                     except Exception as E:
                         print(f"Retrieval Error: {E}")
-                evidence_history.append(iter_evidence)
+                evidence_stats = evidence_tracker.update(
+                    iteration_doc_ids
+                )
+                print(
+                    f"   [Document Novelty]: "
+                    f"{evidence_stats['document_novelty']}"
+                )
+
+                print(
+                    f"   [Semantic Novelty]: "
+                    f"{evidence_stats['semantic_novelty']}"
+                )
+
+                print(
+                    f"   [Semantic Redundancy]: "
+                    f"{evidence_stats['semantic_redundancy']}"
+                )
 
                 # 5. THE GATE: Check if the newly retrieved context is sufficient
                 print(f"\n--- Checking Gate after Iteration {i+1} ---")
@@ -357,5 +373,5 @@ class AdaptiveMedRAG(MedRAG):
                 messages.append(response_message)
                 continue
 
-        return messages[-1]["content"], saved_messages, max_iterations, confidence,query_budget_history, actual_query_count
+        return messages[-1]["content"], saved_messages, max_iterations, confidence,query_budget_history, actual_query_count, evidence_tracker.history
 

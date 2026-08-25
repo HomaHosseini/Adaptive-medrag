@@ -156,7 +156,7 @@ def run_adaptive_benchmark(
         print(f"\nEvaluating {item['id']}...")
 
 
-        raw_answer,history,iterations,confidence,query_budget_history,total_queries  = medrag_runner.adaptive_answer(
+        raw_answer,history,iterations,confidence,query_budget_history,total_queries, _  = medrag_runner.adaptive_answer(
             question=item["question"],
             options=item["options"],
             k=32,
@@ -183,7 +183,8 @@ def run_adaptive_benchmark(
             "iterations": iterations,
             "confidence": confidence,
             "query_budget_history": query_budget_history,
-            "total_queries": total_queries
+            "total_queries": total_queries, 
+            
         }
 
         results.append(result)
@@ -192,7 +193,7 @@ def run_adaptive_benchmark(
             f"  Iterations: {iterations} | "
             f"Queries: {total_queries} | "
             f"Budget history: {query_budget_history} | "
-            f"Final confidence: {confidence:.1f}%"
+            f"Final confidence: {confidence:.1f}% |"
         )
 
     accuracy = correct / len(dataset) * 100
