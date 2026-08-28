@@ -1,0 +1,1117 @@
+{
+    "coverage": {
+        "configuration": "coverage",
+        "accuracy": 33.33333333333333,
+        "correct": 1,
+        "total_questions": 3,
+        "avg_iterations": 2.0,
+        "total_iterations": 6,
+        "avg_queries": 4.0,
+        "total_queries": 12,
+        "avg_successful_retrievals": 4.0,
+        "total_successful_retrievals": 12,
+        "avg_failed_retrievals": 0.0,
+        "total_failed_retrievals": 0,
+        "results": [
+            {
+                "id": "MedQA_4",
+                "configuration": "coverage",
+                "predicted": "A",
+                "expected": "D",
+                "correct": false,
+                "iterations": 2,
+                "confidence": 95.0,
+                "query_budget_history": [
+                    2,
+                    1
+                ],
+                "queries_generated": 3,
+                "successful_retrievals": 3,
+                "failed_retrievals": 0,
+                "use_planner": true,
+                "use_planner_budget": false,
+                "use_coverage": true,
+                "use_novelty": false,
+                "evidence_history": [],
+                "coverage_history": [
+                    {
+                        "coverage": [
+                            {
+                                "id": "R1",
+                                "status": "COVERED",
+                                "confidence": 0.9,
+                                "evidence_summary": "The retrieved evidence identifies Staphylococcus aureus as a gram-positive bacterium that produces teichoic acid and is known to cause coagulase-positive, gram-positive infections, which aligns with the patient's symptoms and laboratory findings."
+                            }
+                        ],
+                        "constraint_coverage": [
+                            {
+                                "id": "C1",
+                                "status": "PARTIAL",
+                                "confidence": 0.7,
+                                "evidence_summary": "The evidence mentions the patient's symptoms, including fevers, chills, and left lower quadrant pain, but does not provide a direct link to the organism most likely to be present in the blood culture."
+                            },
+                            {
+                                "id": "C2",
+                                "status": "PARTIAL",
+                                "confidence": 0.6,
+                                "evidence_summary": "The evidence mentions the patient's laboratory findings, including platelet count, fibrinogen, and D-dimer levels, but does not provide a direct link to the organism most likely to be present in the blood culture."
+                            },
+                            {
+                                "id": "C3",
+                                "status": "PARTIAL",
+                                "confidence": 0.65,
+                                "evidence_summary": "The evidence mentions the presence of mucopurulent discharge from the cervical os and left adnexal tenderness, which is consistent with pelvic inflammatory disease, but does not provide a direct link to the organism most likely to be present in the blood culture."
+                            },
+                            {
+                                "id": "C4",
+                                "status": "MISSING",
+                                "confidence": 0.2,
+                                "evidence_summary": "The evidence does not provide sufficient information about how the patient's age and sex relate to the organism most likely to be present in the blood culture."
+                            }
+                        ],
+                        "core_coverage": 1.0,
+                        "weighted_coverage": 1.0,
+                        "reasoning": "The retrieved evidence provides sufficient information to identify the organism most likely to be present in the blood culture, but the supporting constraints are only partially supported, with some gaps in the evidence."
+                    },
+                    {
+                        "coverage": [
+                            {
+                                "id": "R1",
+                                "status": "COVERED",
+                                "confidence": 0.95,
+                                "evidence_summary": "The evidence directly supports the identification of Staphylococcus aureus as the organism most likely to be present in the blood culture, given the production of teichoic acid and lipoteichoic acid, and its association with pelvic inflammatory disease and sepsis."
+                            }
+                        ],
+                        "constraint_coverage": [
+                            {
+                                "id": "C1",
+                                "status": "PARTIAL",
+                                "confidence": 0.65,
+                                "evidence_summary": "The evidence partially supports the patient's symptoms, including fevers, chills, and left lower quadrant pain, as these are consistent with pelvic inflammatory disease and sepsis, but does not directly address all symptoms."
+                            },
+                            {
+                                "id": "C2",
+                                "status": "PARTIAL",
+                                "confidence": 0.6,
+                                "evidence_summary": "The evidence partially supports the patient's laboratory findings, including platelet count, fibrinogen, and D-dimer levels, as these are indicative of sepsis, but does not directly address the specific values or their implications."
+                            },
+                            {
+                                "id": "C3",
+                                "status": "PARTIAL",
+                                "confidence": 0.7,
+                                "evidence_summary": "The evidence partially supports the presence of mucopurulent discharge from the cervical os and left adnexal tenderness, as these are consistent with pelvic inflammatory disease, but does not directly address the specific findings."
+                            },
+                            {
+                                "id": "C4",
+                                "status": "MISSING",
+                                "confidence": 0.0,
+                                "evidence_summary": "The evidence does not provide sufficient information to support the patient's age and sex as a factor in the diagnosis."
+                            }
+                        ],
+                        "core_coverage": 1.0,
+                        "weighted_coverage": 1.0,
+                        "reasoning": "The evidence provides strong support for the identification of Staphylococcus aureus as the organism most likely to be present in the blood culture, given its production of teichoic acid and lipoteichoic acid, and its association with pelvic inflammatory disease and sepsis. However, the evidence only partially supports the patient's symptoms, laboratory findings, and physical examination results, and does not provide sufficient information to support the patient's age and sex as a factor in the diagnosis."
+                    }
+                ]
+            },
+            {
+                "id": "MedQA_5",
+                "configuration": "coverage",
+                "predicted": "B",
+                "expected": "B",
+                "correct": true,
+                "iterations": 3,
+                "confidence": 80.0,
+                "query_budget_history": [
+                    2,
+                    4,
+                    1
+                ],
+                "queries_generated": 7,
+                "successful_retrievals": 7,
+                "failed_retrievals": 0,
+                "use_planner": true,
+                "use_planner_budget": false,
+                "use_coverage": true,
+                "use_novelty": false,
+                "evidence_history": [],
+                "coverage_history": [
+                    {
+                        "coverage": [
+                            {
+                                "id": "R1",
+                                "status": "PARTIAL",
+                                "confidence": 0.7,
+                                "evidence_summary": "The evidence provides information on effective treatments for allergic conjunctivitis, but does not directly address the patient's specific situation or provide a clear recommendation for the most appropriate treatment."
+                            }
+                        ],
+                        "constraint_coverage": [
+                            {
+                                "id": "C1",
+                                "status": "COVERED",
+                                "confidence": 0.9,
+                                "evidence_summary": "The evidence directly supports the patient's symptoms of itchy, watery eyes and sneezing as being consistent with allergic conjunctivitis."
+                            },
+                            {
+                                "id": "C2",
+                                "status": "MISSING",
+                                "confidence": 0.2,
+                                "evidence_summary": "The evidence does not provide sufficient information to support the patient's history of similar episodes around springtime."
+                            },
+                            {
+                                "id": "C3",
+                                "status": "MISSING",
+                                "confidence": 0.1,
+                                "evidence_summary": "The evidence does not provide sufficient information to support the patient's current medications."
+                            },
+                            {
+                                "id": "C4",
+                                "status": "MISSING",
+                                "confidence": 0.1,
+                                "evidence_summary": "The evidence does not provide sufficient information to support the patient's medical conditions, including iron deficiency anemia and ankylosing spondylitis."
+                            }
+                        ],
+                        "core_coverage": 0.5,
+                        "weighted_coverage": 0.5,
+                        "reasoning": "The evidence provides some support for the patient's symptoms and potential treatments, but lacks sufficient information to fully address the patient's specific situation and medical conditions."
+                    },
+                    {
+                        "coverage": [
+                            {
+                                "id": "R1",
+                                "status": "PARTIAL",
+                                "confidence": 0.7,
+                                "evidence_summary": "The evidence provides information on effective treatments for allergic conjunctivitis, including antihistamine eye drops, mast cell stabilizers, and NSAIDs, but does not directly address the most appropriate treatment for this specific patient."
+                            }
+                        ],
+                        "constraint_coverage": [
+                            {
+                                "id": "C1",
+                                "status": "COVERED",
+                                "confidence": 0.9,
+                                "evidence_summary": "The evidence directly supports the patient's symptoms of itchy, watery eyes and sneezing, which are consistent with allergic conjunctivitis."
+                            },
+                            {
+                                "id": "C2",
+                                "status": "COVERED",
+                                "confidence": 0.85,
+                                "evidence_summary": "The evidence supports the patient's history of similar episode around springtime, which is a common time for allergic conjunctivitis symptoms to occur."
+                            },
+                            {
+                                "id": "C3",
+                                "status": "PARTIAL",
+                                "confidence": 0.6,
+                                "evidence_summary": "The evidence mentions the patient's current medications, including indomethacin, but does not provide sufficient information on potential interactions with antihistamine eye drops."
+                            },
+                            {
+                                "id": "C4",
+                                "status": "MISSING",
+                                "confidence": 0.2,
+                                "evidence_summary": "The evidence does not provide sufficient information on how the patient's medical conditions, including iron deficiency anemia and ankylosing spondylitis, may affect the treatment of allergic conjunctivitis."
+                            }
+                        ],
+                        "core_coverage": 0.5,
+                        "weighted_coverage": 0.5,
+                        "reasoning": "The evidence provides useful information on the treatment of allergic conjunctivitis, but there are gaps in the evidence, particularly with regards to the patient's specific medical conditions and potential interactions with current medications."
+                    },
+                    {
+                        "coverage": [
+                            {
+                                "id": "R1",
+                                "status": "PARTIAL",
+                                "confidence": 0.7,
+                                "evidence_summary": "The evidence provides information on effective treatments for allergic conjunctivitis, including antihistamines, mast cell stabilizers, and NSAIDs, but does not directly address the patient's specific situation and the most appropriate treatment considering their medical history and current medications."
+                            }
+                        ],
+                        "constraint_coverage": [
+                            {
+                                "id": "C1",
+                                "status": "COVERED",
+                                "confidence": 0.9,
+                                "evidence_summary": "The evidence directly supports this constraint by discussing the symptoms of allergic conjunctivitis, such as itchy, watery eyes and sneezing, which are consistent with the patient's symptoms."
+                            },
+                            {
+                                "id": "C2",
+                                "status": "PARTIAL",
+                                "confidence": 0.6,
+                                "evidence_summary": "The evidence partially supports this constraint by mentioning the effectiveness of treatments during peak pollen season, but does not directly address the patient's history of similar episodes around springtime."
+                            },
+                            {
+                                "id": "C3",
+                                "status": "PARTIAL",
+                                "confidence": 0.5,
+                                "evidence_summary": "The evidence partially supports this constraint by discussing potential interactions between medications, but does not provide sufficient information on the patient's current medications and their potential interactions with treatments for allergic conjunctivitis."
+                            },
+                            {
+                                "id": "C4",
+                                "status": "MISSING",
+                                "confidence": 0.2,
+                                "evidence_summary": "The evidence does not provide sufficient information on how the patient's medical conditions, including iron deficiency anemia and ankylosing spondylitis, may affect the treatment of allergic conjunctivitis."
+                            }
+                        ],
+                        "core_coverage": 0.5,
+                        "weighted_coverage": 0.5,
+                        "reasoning": "The evidence provides useful information on the treatment of allergic conjunctivitis, but there are gaps in the coverage of the patient's specific situation, including their medical history and current medications. The evidence supports some of the constraints, but others remain partially or fully unsupported."
+                    }
+                ]
+            },
+            {
+                "id": "MedQA_6",
+                "configuration": "coverage",
+                "predicted": "A",
+                "expected": "D",
+                "correct": false,
+                "iterations": 1,
+                "confidence": 90.0,
+                "query_budget_history": [
+                    2
+                ],
+                "queries_generated": 2,
+                "successful_retrievals": 2,
+                "failed_retrievals": 0,
+                "use_planner": true,
+                "use_planner_budget": false,
+                "use_coverage": true,
+                "use_novelty": false,
+                "evidence_history": [],
+                "coverage_history": [
+                    {
+                        "coverage": [
+                            {
+                                "id": "R1",
+                                "status": "COVERED",
+                                "confidence": 0.9,
+                                "evidence_summary": "The retrieved evidence provides sufficient information to determine the appropriate management for the patient's condition, including the recommended initial pharmacological approach for a patient with suspected acute coronary syndrome who has recently used cocaine."
+                            }
+                        ],
+                        "constraint_coverage": [
+                            {
+                                "id": "C1",
+                                "status": "PARTIAL",
+                                "confidence": 0.6,
+                                "evidence_summary": "The evidence mentions the patient's history of untreated hypertension, but it does not provide direct guidance on how this history should influence the management of the patient's current condition."
+                            },
+                            {
+                                "id": "C2",
+                                "status": "COVERED",
+                                "confidence": 0.85,
+                                "evidence_summary": "The evidence directly addresses the patient's recent cocaine abuse and its influence on the choice of beta-blockers in the management of acute coronary syndrome or myocardial infarction."
+                            },
+                            {
+                                "id": "C3",
+                                "status": "COVERED",
+                                "confidence": 0.9,
+                                "evidence_summary": "The evidence provides sufficient information about the patient's symptoms of chest pain and nausea and how they relate to the suspected acute coronary syndrome."
+                            },
+                            {
+                                "id": "C4",
+                                "status": "PARTIAL",
+                                "confidence": 0.5,
+                                "evidence_summary": "The evidence mentions the timing of symptoms starting 30 minutes prior at a local bar, but it does not provide direct guidance on how this temporal relationship should influence the management of the patient's condition."
+                            }
+                        ],
+                        "core_coverage": 1.0,
+                        "weighted_coverage": 1.0,
+                        "reasoning": "The retrieved evidence provides sufficient information to determine the appropriate management for the patient's condition, including the recommended initial pharmacological approach for a patient with suspected acute coronary syndrome who has recently used cocaine. However, some supporting constraints, such as the patient's history of untreated hypertension and the timing of symptoms, are only partially supported by the evidence."
+                    }
+                ]
+            }
+        ]
+    },
+    "novelty": {
+        "configuration": "novelty",
+        "accuracy": 66.66666666666666,
+        "correct": 2,
+        "total_questions": 3,
+        "avg_iterations": 1.6666666666666667,
+        "total_iterations": 5,
+        "avg_queries": 3.0,
+        "total_queries": 9,
+        "avg_successful_retrievals": 3.0,
+        "total_successful_retrievals": 9,
+        "avg_failed_retrievals": 0.0,
+        "total_failed_retrievals": 0,
+        "results": [
+            {
+                "id": "MedQA_4",
+                "configuration": "novelty",
+                "predicted": "D",
+                "expected": "D",
+                "correct": true,
+                "iterations": 2,
+                "confidence": 85.0,
+                "query_budget_history": [
+                    2,
+                    2
+                ],
+                "queries_generated": 4,
+                "successful_retrievals": 4,
+                "failed_retrievals": 0,
+                "use_planner": false,
+                "use_planner_budget": false,
+                "use_coverage": false,
+                "use_novelty": true,
+                "evidence_history": [
+                    {
+                        "num_documents": 64,
+                        "num_new_documents": null,
+                        "document_novelty": null,
+                        "semantic_novelty": null,
+                        "semantic_median_novelty": null,
+                        "high_semantic_novelty_fraction": null,
+                        "semantic_redundancy": null,
+                        "novelty_values": null,
+                        "found_embeddings": 64
+                    },
+                    {
+                        "num_documents": 61,
+                        "num_new_documents": 35,
+                        "document_novelty": 0.5737704918032787,
+                        "semantic_novelty": 0.07541608810424805,
+                        "semantic_median_novelty": 0.09555965662002563,
+                        "high_semantic_novelty_fraction": 0.0,
+                        "semantic_redundancy": 0.924583911895752,
+                        "novelty_values": [
+                            0.0,
+                            -3.5762786865234375e-07,
+                            0.09555965662002563,
+                            2.980232238769531e-07,
+                            0.0,
+                            2.980232238769531e-07,
+                            1.1920928955078125e-07,
+                            0.0,
+                            0.0,
+                            0.0,
+                            -2.384185791015625e-07,
+                            0.0,
+                            -2.384185791015625e-07,
+                            1.1920928955078125e-07,
+                            2.384185791015625e-07,
+                            0.0,
+                            0.15507352352142334,
+                            -1.1920928955078125e-07,
+                            0.0,
+                            1.1920928955078125e-07,
+                            0.06625747680664062,
+                            -1.1920928955078125e-07,
+                            0.1280970573425293,
+                            0.09816980361938477,
+                            0.0,
+                            0.12729287147521973,
+                            0.06377840042114258,
+                            -2.384185791015625e-07,
+                            1.7881393432617188e-07,
+                            0.10184580087661743,
+                            0.0,
+                            0.11867469549179077,
+                            2.384185791015625e-07,
+                            0.12618368864059448,
+                            0.14986687898635864,
+                            0.1661144495010376,
+                            0.11736941337585449,
+                            0.1755344271659851,
+                            0.13640785217285156,
+                            0.1229584813117981,
+                            0.1141018271446228,
+                            0.16750192642211914,
+                            5.960464477539063e-08,
+                            0.15274262428283691,
+                            0.13586008548736572,
+                            0.1795322299003601,
+                            0.10497379302978516,
+                            0.12697404623031616,
+                            0.12531864643096924,
+                            0.1678066849708557,
+                            -1.1920928955078125e-07,
+                            0.16544568538665771,
+                            0.17318695783615112,
+                            0.08985954523086548,
+                            0.18711286783218384,
+                            0.14049744606018066,
+                            0.13741940259933472,
+                            0.08050984144210815,
+                            0.1710679531097412,
+                            0.13369446992874146,
+                            0.09759104251861572
+                        ],
+                        "found_embeddings": 61
+                    }
+                ],
+                "coverage_history": []
+            },
+            {
+                "id": "MedQA_5",
+                "configuration": "novelty",
+                "predicted": "B",
+                "expected": "B",
+                "correct": true,
+                "iterations": 1,
+                "confidence": 90.0,
+                "query_budget_history": [
+                    2
+                ],
+                "queries_generated": 2,
+                "successful_retrievals": 2,
+                "failed_retrievals": 0,
+                "use_planner": false,
+                "use_planner_budget": false,
+                "use_coverage": false,
+                "use_novelty": true,
+                "evidence_history": [
+                    {
+                        "num_documents": 53,
+                        "num_new_documents": null,
+                        "document_novelty": null,
+                        "semantic_novelty": null,
+                        "semantic_median_novelty": null,
+                        "high_semantic_novelty_fraction": null,
+                        "semantic_redundancy": null,
+                        "novelty_values": null,
+                        "found_embeddings": 53
+                    }
+                ],
+                "coverage_history": []
+            },
+            {
+                "id": "MedQA_6",
+                "configuration": "novelty",
+                "predicted": "A",
+                "expected": "D",
+                "correct": false,
+                "iterations": 2,
+                "confidence": 90.0,
+                "query_budget_history": [
+                    2,
+                    1
+                ],
+                "queries_generated": 3,
+                "successful_retrievals": 3,
+                "failed_retrievals": 0,
+                "use_planner": false,
+                "use_planner_budget": false,
+                "use_coverage": false,
+                "use_novelty": true,
+                "evidence_history": [
+                    {
+                        "num_documents": 63,
+                        "num_new_documents": null,
+                        "document_novelty": null,
+                        "semantic_novelty": null,
+                        "semantic_median_novelty": null,
+                        "high_semantic_novelty_fraction": null,
+                        "semantic_redundancy": null,
+                        "novelty_values": null,
+                        "found_embeddings": 63
+                    },
+                    {
+                        "num_documents": 32,
+                        "num_new_documents": 17,
+                        "document_novelty": 0.53125,
+                        "semantic_novelty": 0.0746096819639206,
+                        "semantic_median_novelty": 0.07612833380699158,
+                        "high_semantic_novelty_fraction": 0.0,
+                        "semantic_redundancy": 0.9253903031349182,
+                        "novelty_values": [
+                            -1.1920928955078125e-07,
+                            5.960464477539063e-08,
+                            0.152107834815979,
+                            -1.1920928955078125e-07,
+                            1.7881393432617188e-07,
+                            5.960464477539063e-08,
+                            0.08983635902404785,
+                            0.0,
+                            0.09623533487319946,
+                            -3.5762786865234375e-07,
+                            1.1920928955078125e-07,
+                            0.19055306911468506,
+                            0.10042715072631836,
+                            5.364418029785156e-07,
+                            0.09182769060134888,
+                            0.183951735496521,
+                            0.06612110137939453,
+                            0.08613556623458862,
+                            0.16294938325881958,
+                            0.2090132236480713,
+                            0.1293705701828003,
+                            0.16783952713012695,
+                            -1.1920928955078125e-07,
+                            2.384185791015625e-07,
+                            0.19364196062088013,
+                            -2.384185791015625e-07,
+                            0.0,
+                            0.0,
+                            0.14141637086868286,
+                            0.16526496410369873,
+                            0.16081786155700684,
+                            -2.384185791015625e-07
+                        ],
+                        "found_embeddings": 32
+                    }
+                ],
+                "coverage_history": []
+            }
+        ]
+    },
+    "full": {
+        "configuration": "full",
+        "accuracy": 66.66666666666666,
+        "correct": 2,
+        "total_questions": 3,
+        "avg_iterations": 2.0,
+        "total_iterations": 6,
+        "avg_queries": 5.0,
+        "total_queries": 15,
+        "avg_successful_retrievals": 5.0,
+        "total_successful_retrievals": 15,
+        "avg_failed_retrievals": 0.0,
+        "total_failed_retrievals": 0,
+        "results": [
+            {
+                "id": "MedQA_4",
+                "configuration": "full",
+                "predicted": "D",
+                "expected": "D",
+                "correct": true,
+                "iterations": 3,
+                "confidence": 70.0,
+                "query_budget_history": [
+                    3,
+                    2,
+                    2
+                ],
+                "queries_generated": 7,
+                "successful_retrievals": 7,
+                "failed_retrievals": 0,
+                "use_planner": true,
+                "use_planner_budget": true,
+                "use_coverage": true,
+                "use_novelty": true,
+                "evidence_history": [
+                    {
+                        "num_documents": 96,
+                        "num_new_documents": null,
+                        "document_novelty": null,
+                        "semantic_novelty": null,
+                        "semantic_median_novelty": null,
+                        "high_semantic_novelty_fraction": null,
+                        "semantic_redundancy": null,
+                        "novelty_values": null,
+                        "found_embeddings": 96
+                    },
+                    {
+                        "num_documents": 63,
+                        "num_new_documents": 47,
+                        "document_novelty": 0.746031746031746,
+                        "semantic_novelty": 0.08692269027233124,
+                        "semantic_median_novelty": 0.10149747133255005,
+                        "high_semantic_novelty_fraction": 0.0,
+                        "semantic_redundancy": 0.9130772352218628,
+                        "novelty_values": [
+                            -1.1920928955078125e-07,
+                            0.10135668516159058,
+                            0.09555965662002563,
+                            0.10149747133255005,
+                            0.0,
+                            -2.384185791015625e-07,
+                            1.1920928955078125e-07,
+                            0.08443909883499146,
+                            0.0,
+                            -2.384185791015625e-07,
+                            0.09802216291427612,
+                            1.1920928955078125e-07,
+                            0.10741561651229858,
+                            4.172325134277344e-07,
+                            1.1920928955078125e-07,
+                            0.14397704601287842,
+                            0.07509589195251465,
+                            -3.5762786865234375e-07,
+                            0.07424318790435791,
+                            5.960464477539063e-08,
+                            0.1312340497970581,
+                            0.09435182809829712,
+                            2.384185791015625e-07,
+                            0.11593848466873169,
+                            0.07967686653137207,
+                            0.11728858947753906,
+                            1.1920928955078125e-07,
+                            0.11631613969802856,
+                            0.09390884637832642,
+                            0.0,
+                            0.10790354013442993,
+                            0.10813528299331665,
+                            0.1503220796585083,
+                            0.12127161026000977,
+                            0.1383703351020813,
+                            0.0851888656616211,
+                            0.13762348890304565,
+                            0.11766922473907471,
+                            0.1306082010269165,
+                            0.11879599094390869,
+                            0.07700705528259277,
+                            0.15275239944458008,
+                            0.1407679319381714,
+                            0.07629537582397461,
+                            0.12927591800689697,
+                            0.1337658166885376,
+                            0.11647659540176392,
+                            0.1778041124343872,
+                            5.960464477539063e-08,
+                            0.12158536911010742,
+                            0.14355099201202393,
+                            0.057938337326049805,
+                            0.10814452171325684,
+                            0.09526824951171875,
+                            0.1381129026412964,
+                            0.12816959619522095,
+                            0.214888334274292,
+                            0.1306464672088623,
+                            0.1361408829689026,
+                            -1.1920928955078125e-07,
+                            0.14802944660186768,
+                            0.1005437970161438,
+                            0.10275465250015259
+                        ],
+                        "found_embeddings": 63
+                    },
+                    {
+                        "num_documents": 59,
+                        "num_new_documents": 23,
+                        "document_novelty": 0.3898305084745763,
+                        "semantic_novelty": 0.04859287291765213,
+                        "semantic_median_novelty": 1.1920928955078125e-07,
+                        "high_semantic_novelty_fraction": 0.0,
+                        "semantic_redundancy": 0.9514071345329285,
+                        "novelty_values": [
+                            1.7881393432617188e-07,
+                            0.12741512060165405,
+                            1.1920928955078125e-07,
+                            0.14164119958877563,
+                            -1.1920928955078125e-07,
+                            0.15630733966827393,
+                            0.17092519998550415,
+                            0.134057879447937,
+                            1.1920928955078125e-07,
+                            0.09063899517059326,
+                            0.11861145496368408,
+                            0.09909093379974365,
+                            0.12186765670776367,
+                            -1.1920928955078125e-07,
+                            -4.76837158203125e-07,
+                            3.5762786865234375e-07,
+                            -1.1920928955078125e-07,
+                            0.1264767050743103,
+                            0.12485778331756592,
+                            -2.384185791015625e-07,
+                            -1.1920928955078125e-07,
+                            0.09364479780197144,
+                            -4.76837158203125e-07,
+                            0.1590314507484436,
+                            0.12096083164215088,
+                            -1.1920928955078125e-07,
+                            5.960464477539063e-08,
+                            0.12087923288345337,
+                            0.1449800729751587,
+                            1.1920928955078125e-07,
+                            0.13569903373718262,
+                            0.11786246299743652,
+                            2.384185791015625e-07,
+                            0.0,
+                            -2.384185791015625e-07,
+                            4.172325134277344e-07,
+                            5.960464477539063e-08,
+                            -3.5762786865234375e-07,
+                            3.5762786865234375e-07,
+                            0.0,
+                            5.960464477539063e-08,
+                            0.0,
+                            -2.384185791015625e-07,
+                            -1.1920928955078125e-07,
+                            0.0,
+                            0.09740215539932251,
+                            2.384185791015625e-07,
+                            0.0,
+                            -1.1920928955078125e-07,
+                            0.0,
+                            0.13240212202072144,
+                            -2.384185791015625e-07,
+                            -2.384185791015625e-07,
+                            -1.1920928955078125e-07,
+                            0.10891133546829224,
+                            -1.1920928955078125e-07,
+                            -2.384185791015625e-07,
+                            0.13286656141281128,
+                            0.09045076370239258
+                        ],
+                        "found_embeddings": 59
+                    }
+                ],
+                "coverage_history": [
+                    {
+                        "coverage": [
+                            {
+                                "id": "R1",
+                                "status": "PARTIAL",
+                                "confidence": 0.7,
+                                "evidence_summary": "The evidence suggests that Gram-negative bacteria such as Escherichia coli and Klebsiella species are commonly associated with pelvic inflammatory disease and can cause severe sepsis or septic shock, but it does not directly identify the organism most likely to be present in the blood culture."
+                            }
+                        ],
+                        "constraint_coverage": [
+                            {
+                                "id": "C1",
+                                "status": "COVERED",
+                                "confidence": 0.9,
+                                "evidence_summary": "The evidence directly supports the patient's symptoms, including fevers, chills, and left lower quadrant pain, as being consistent with severe sepsis or septic shock."
+                            },
+                            {
+                                "id": "C2",
+                                "status": "COVERED",
+                                "confidence": 0.85,
+                                "evidence_summary": "The evidence directly supports the laboratory findings, including platelet count, fibrinogen, and D-dimer levels, as being consistent with severe sepsis or septic shock."
+                            },
+                            {
+                                "id": "C3",
+                                "status": "COVERED",
+                                "confidence": 0.85,
+                                "evidence_summary": "The evidence directly supports the presence of mucopurulent discharge from the cervical os and left adnexal tenderness as being consistent with pelvic inflammatory disease."
+                            },
+                            {
+                                "id": "C4",
+                                "status": "COVERED",
+                                "confidence": 0.95,
+                                "evidence_summary": "The evidence directly supports the patient's age and sex as being consistent with the demographic characteristics of a patient with pelvic inflammatory disease."
+                            }
+                        ],
+                        "core_coverage": 0.5,
+                        "weighted_coverage": 0.5,
+                        "reasoning": "The evidence provides useful support for the core requirement and supporting constraints, but an important part of the core requirement remains uncertain or unsupported, as the organism most likely to be present in the blood culture is not directly identified."
+                    },
+                    {
+                        "coverage": [
+                            {
+                                "id": "R1",
+                                "status": "PARTIAL",
+                                "confidence": 0.7,
+                                "evidence_summary": "The evidence suggests that Gram-negative bacteria such as Escherichia coli, Klebsiella, and Enterobacter are commonly associated with pelvic inflammatory disease and can cause severe sepsis or septic shock, but it does not directly identify the organism most likely to be present in the blood culture."
+                            }
+                        ],
+                        "constraint_coverage": [
+                            {
+                                "id": "C1",
+                                "status": "PARTIAL",
+                                "confidence": 0.6,
+                                "evidence_summary": "The evidence mentions symptoms such as fevers, chills, and left lower quadrant pain, but it does not fully capture the patient's symptoms and their relevance to the diagnosis."
+                            },
+                            {
+                                "id": "C2",
+                                "status": "PARTIAL",
+                                "confidence": 0.65,
+                                "evidence_summary": "The evidence mentions laboratory findings such as platelet count, fibrinogen, and D-dimer levels, but it does not fully explain their significance in the context of the patient's condition."
+                            },
+                            {
+                                "id": "C3",
+                                "status": "PARTIAL",
+                                "confidence": 0.65,
+                                "evidence_summary": "The evidence mentions the presence of mucopurulent discharge from the cervical os and left adnexal tenderness, but it does not fully capture the clinical significance of these findings."
+                            },
+                            {
+                                "id": "C4",
+                                "status": "MISSING",
+                                "confidence": 0.2,
+                                "evidence_summary": "The evidence does not provide sufficient information about the patient's age and sex being relevant to the diagnosis."
+                            }
+                        ],
+                        "core_coverage": 0.5,
+                        "weighted_coverage": 0.5,
+                        "reasoning": "The retrieved evidence provides some useful information about the patient's condition and possible causes, but it does not fully support the core requirement of identifying the organism most likely to be present in the blood culture. The evidence also partially supports some of the supporting constraints, but it lacks sufficient information to fully capture the patient's symptoms, laboratory findings, and clinical significance of the findings."
+                    },
+                    {
+                        "coverage": [
+                            {
+                                "id": "R1",
+                                "status": "PARTIAL",
+                                "confidence": 0.7,
+                                "evidence_summary": "The evidence suggests that Gram-negative bacteria such as Escherichia coli, Klebsiella, and Enterobacter are commonly associated with pelvic inflammatory disease and can cause severe sepsis or septic shock, but it does not directly identify the organism most likely to be present in the blood culture."
+                            }
+                        ],
+                        "constraint_coverage": [
+                            {
+                                "id": "C1",
+                                "status": "PARTIAL",
+                                "confidence": 0.6,
+                                "evidence_summary": "The evidence mentions the patient's symptoms, including fevers, chills, and left lower quadrant pain, but it does not provide a comprehensive overview of the patient's clinical findings."
+                            },
+                            {
+                                "id": "C2",
+                                "status": "PARTIAL",
+                                "confidence": 0.55,
+                                "evidence_summary": "The evidence mentions some laboratory findings, including platelet count, fibrinogen, and D-dimer levels, but it does not provide a complete picture of the patient's laboratory results."
+                            },
+                            {
+                                "id": "C3",
+                                "status": "PARTIAL",
+                                "confidence": 0.65,
+                                "evidence_summary": "The evidence mentions the presence of mucopurulent discharge from the cervical os and left adnexal tenderness, which is relevant to the patient's clinical findings, but it does not provide a detailed description of the patient's pelvic examination."
+                            },
+                            {
+                                "id": "C4",
+                                "status": "MISSING",
+                                "confidence": 0.2,
+                                "evidence_summary": "The evidence does not provide sufficient information about the patient's age and sex, although it is mentioned that the patient is a 39-year-old woman."
+                            }
+                        ],
+                        "core_coverage": 0.5,
+                        "weighted_coverage": 0.5,
+                        "reasoning": "The retrieved evidence provides some useful information about the patient's condition and possible causes of the infection, but it does not fully cover all the core requirements and supporting constraints. The evidence is partial and does not directly identify the organism most likely to be present in the blood culture."
+                    }
+                ]
+            },
+            {
+                "id": "MedQA_5",
+                "configuration": "full",
+                "predicted": "B",
+                "expected": "B",
+                "correct": true,
+                "iterations": 2,
+                "confidence": 85.0,
+                "query_budget_history": [
+                    3,
+                    2
+                ],
+                "queries_generated": 5,
+                "successful_retrievals": 5,
+                "failed_retrievals": 0,
+                "use_planner": true,
+                "use_planner_budget": true,
+                "use_coverage": true,
+                "use_novelty": true,
+                "evidence_history": [
+                    {
+                        "num_documents": 80,
+                        "num_new_documents": null,
+                        "document_novelty": null,
+                        "semantic_novelty": null,
+                        "semantic_median_novelty": null,
+                        "high_semantic_novelty_fraction": null,
+                        "semantic_redundancy": null,
+                        "novelty_values": null,
+                        "found_embeddings": 80
+                    },
+                    {
+                        "num_documents": 49,
+                        "num_new_documents": 10,
+                        "document_novelty": 0.20408163265306123,
+                        "semantic_novelty": 0.020931750535964966,
+                        "semantic_median_novelty": 5.960464477539063e-08,
+                        "high_semantic_novelty_fraction": 0.0,
+                        "semantic_redundancy": 0.9790682196617126,
+                        "novelty_values": [
+                            0.0,
+                            0.0,
+                            -2.384185791015625e-07,
+                            0.0,
+                            1.1920928955078125e-07,
+                            -1.1920928955078125e-07,
+                            0.0,
+                            -1.1920928955078125e-07,
+                            5.960464477539063e-08,
+                            5.960464477539063e-08,
+                            0.11036497354507446,
+                            0.10741740465164185,
+                            5.960464477539063e-08,
+                            -2.384185791015625e-07,
+                            -1.1920928955078125e-07,
+                            1.1920928955078125e-07,
+                            4.172325134277344e-07,
+                            0.0,
+                            3.5762786865234375e-07,
+                            1.7881393432617188e-07,
+                            4.172325134277344e-07,
+                            0.0,
+                            -1.1920928955078125e-07,
+                            0.0,
+                            0.1367085576057434,
+                            0.13519185781478882,
+                            2.384185791015625e-07,
+                            0.1064838171005249,
+                            0.0,
+                            -1.1920928955078125e-07,
+                            -2.384185791015625e-07,
+                            0.12914085388183594,
+                            0.0,
+                            0.0,
+                            1.7881393432617188e-07,
+                            -1.1920928955078125e-07,
+                            1.1920928955078125e-07,
+                            -1.1920928955078125e-07,
+                            2.384185791015625e-07,
+                            -1.1920928955078125e-07,
+                            -2.384185791015625e-07,
+                            0.07829892635345459,
+                            1.1920928955078125e-07,
+                            0.0,
+                            0.07934999465942383,
+                            -2.384185791015625e-07,
+                            0.07698649168014526,
+                            2.384185791015625e-07,
+                            0.06571215391159058
+                        ],
+                        "found_embeddings": 49
+                    }
+                ],
+                "coverage_history": [
+                    {
+                        "coverage": [
+                            {
+                                "id": "R1",
+                                "status": "PARTIAL",
+                                "confidence": 0.6,
+                                "evidence_summary": "The evidence provides information on potential treatments for allergic conjunctivitis, including ketotifen and fluorometholone, but does not directly state the most appropriate treatment for the patient's condition."
+                            }
+                        ],
+                        "constraint_coverage": [
+                            {
+                                "id": "C1",
+                                "status": "COVERED",
+                                "confidence": 0.9,
+                                "evidence_summary": "The evidence discusses the symptoms of allergic conjunctivitis, including itchy, watery eyes, which aligns with the patient's symptoms."
+                            },
+                            {
+                                "id": "C2",
+                                "status": "COVERED",
+                                "confidence": 0.8,
+                                "evidence_summary": "The evidence implies a seasonal pattern for allergic conjunctivitis, which is consistent with the patient's history of similar episodes around springtime."
+                            },
+                            {
+                                "id": "C3",
+                                "status": "MISSING",
+                                "confidence": 0.2,
+                                "evidence_summary": "The evidence does not provide sufficient information on how the patient's current medications, including ferrous sulfate, artificial tear drops, and indomethacin, affect the treatment of allergic conjunctivitis."
+                            },
+                            {
+                                "id": "C4",
+                                "status": "MISSING",
+                                "confidence": 0.1,
+                                "evidence_summary": "The evidence does not mention the patient's occupation as an elementary school teacher or its relevance to the treatment of allergic conjunctivitis."
+                            }
+                        ],
+                        "core_coverage": 0.5,
+                        "weighted_coverage": 0.5,
+                        "reasoning": "The evidence provides some support for the core requirement and constraints, but there are gaps in the information, particularly regarding the patient's current medications and occupation. The evidence focuses on potential treatments for allergic conjunctivitis, but does not directly address the most appropriate treatment for the patient's specific condition."
+                    },
+                    {
+                        "coverage": [
+                            {
+                                "id": "R1",
+                                "status": "PARTIAL",
+                                "confidence": 0.7,
+                                "evidence_summary": "The evidence provides information on the treatment of allergic conjunctivitis, including the use of ketotifen eye drops and fluorometholone, but does not directly address the patient's specific condition and the most appropriate treatment."
+                            }
+                        ],
+                        "constraint_coverage": [
+                            {
+                                "id": "C1",
+                                "status": "COVERED",
+                                "confidence": 0.9,
+                                "evidence_summary": "The evidence mentions the symptoms of itchy, watery eyes and sneezing, which are relevant to the patient's condition."
+                            },
+                            {
+                                "id": "C2",
+                                "status": "COVERED",
+                                "confidence": 0.85,
+                                "evidence_summary": "The evidence mentions the patient's history of similar episodes, which is relevant to the temporal relationship of the patient's condition."
+                            },
+                            {
+                                "id": "C3",
+                                "status": "PARTIAL",
+                                "confidence": 0.6,
+                                "evidence_summary": "The evidence mentions the patient's current medications, but does not provide sufficient information on how these medications may interact with potential treatments for allergic conjunctivitis."
+                            },
+                            {
+                                "id": "C4",
+                                "status": "MISSING",
+                                "confidence": 0.2,
+                                "evidence_summary": "The evidence does not provide sufficient information on how the patient's occupation as an elementary school teacher may impact their condition or treatment."
+                            }
+                        ],
+                        "core_coverage": 0.5,
+                        "weighted_coverage": 0.5,
+                        "reasoning": "The evidence provides some useful information on the treatment of allergic conjunctivitis, but there are gaps in the evidence, particularly with regards to the patient's specific condition and the most appropriate treatment. The evidence does provide some support for the patient's symptoms and history, but is less clear on the potential interactions with current medications and the impact of the patient's occupation."
+                    }
+                ]
+            },
+            {
+                "id": "MedQA_6",
+                "configuration": "full",
+                "predicted": "A",
+                "expected": "D",
+                "correct": false,
+                "iterations": 1,
+                "confidence": 90.0,
+                "query_budget_history": [
+                    3
+                ],
+                "queries_generated": 3,
+                "successful_retrievals": 3,
+                "failed_retrievals": 0,
+                "use_planner": true,
+                "use_planner_budget": true,
+                "use_coverage": true,
+                "use_novelty": true,
+                "evidence_history": [
+                    {
+                        "num_documents": 86,
+                        "num_new_documents": null,
+                        "document_novelty": null,
+                        "semantic_novelty": null,
+                        "semantic_median_novelty": null,
+                        "high_semantic_novelty_fraction": null,
+                        "semantic_redundancy": null,
+                        "novelty_values": null,
+                        "found_embeddings": 86
+                    }
+                ],
+                "coverage_history": [
+                    {
+                        "coverage": [
+                            {
+                                "id": "R1",
+                                "status": "COVERED",
+                                "confidence": 0.9,
+                                "evidence_summary": "The retrieved evidence provides sufficient information to determine the appropriate management for the patient's condition, including addressing potential complications of cocaine use and providing standard management for acute coronary syndrome."
+                            }
+                        ],
+                        "constraint_coverage": [
+                            {
+                                "id": "C1",
+                                "status": "PARTIAL",
+                                "confidence": 0.6,
+                                "evidence_summary": "The evidence mentions the patient's history of untreated hypertension, but it does not provide detailed information on how this history specifically influences the management of the patient's current condition."
+                            },
+                            {
+                                "id": "C2",
+                                "status": "COVERED",
+                                "confidence": 0.85,
+                                "evidence_summary": "The retrieved evidence directly addresses the patient's recent cocaine abuse, discussing its implications for management, including the potential for unopposed alpha-adrenergic stimulation and the need for careful consideration of beta-blocker use."
+                            },
+                            {
+                                "id": "C3",
+                                "status": "COVERED",
+                                "confidence": 0.95,
+                                "evidence_summary": "The evidence thoroughly covers the patient's symptoms of chest pain and nausea, relating them to potential acute coronary syndrome and the need for appropriate management, including the consideration of cocaine-induced coronary artery vasoconstriction."
+                            },
+                            {
+                                "id": "C4",
+                                "status": "PARTIAL",
+                                "confidence": 0.55,
+                                "evidence_summary": "While the evidence mentions the timing of symptoms, it does not extensively discuss how the specific timing (starting 30 minutes prior at a local bar) influences the management decisions beyond the general approach to acute coronary syndrome and cocaine use."
+                            }
+                        ],
+                        "core_coverage": 1.0,
+                        "weighted_coverage": 1.0,
+                        "reasoning": "The retrieved evidence provides comprehensive coverage of the core requirement for determining the appropriate management of the patient's condition, considering both the acute coronary syndrome and the recent cocaine use. However, the coverage of supporting constraints varies, with some being well-supported and others receiving only partial consideration in the evidence."
+                    }
+                ]
+            }
+        ]
+    }
+}

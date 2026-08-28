@@ -160,7 +160,7 @@ class MedRAG:
                     "max_tokens": kwargs.get("max_tokens", 2048),
                     "temperature": kwargs.get("temperature", 0.0),
                 },
-                timeout=(10, 120),
+                timeout=(60, 180),
             )
 
             response.raise_for_status()

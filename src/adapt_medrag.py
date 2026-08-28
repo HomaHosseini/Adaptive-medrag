@@ -4,29 +4,225 @@ import os
 import requests
 import re, ast
 from .evidence_tracker import EvidenceTracker
+from .evidence_coverage import EvidenceCoverageAnalyzer
+from .question_planner import QuestionPlanner
 
-def check_stopping_gate(medrag_instance,question,context,threshold=85):
+def check_stopping_gate(
+    medrag_instance,
+    question,
+    context,
+    threshold=85,
+    gate_features=None,
+    coverage_stats=None,
+    evidence_stats=None,
+):
     """
-    Question-only stopping gate.
+    Configurable stopping gate.
 
-    The gate receives:
-        - the original question
-        - accumulated retrieved evidence
-
-    It does NOT receive the answer choices.
-
-    Returns:
-        should_stop
+    Available features:
         confidence
         answerable
-        reasoning
+        coverage
+        novelty
+        redundancy
+
+    Examples:
+
+        ["confidence", "answerable"]
+
+        ["confidence", "answerable", "coverage"]
+
+        ["confidence", "answerable", "coverage",
+         "novelty", "redundancy"]
+
+    The gate NEVER receives answer choices.
     """
 
+    if gate_features is None:
+        gate_features = [
+            "confidence",
+            "answerable",
+        ]
+
     if not context or context.strip() == "":
-        return False, 0, False, "No retrieved evidence available."
+        return (
+            False,
+            0.0,
+            False,
+            "No retrieved evidence available."
+        )
+
+    # ==========================================================
+    # Build information given to the gate
+    # ==========================================================
+
+    signal_text = []
+
+    # ----------------------------------------------------------
+    # Coverage
+    # ----------------------------------------------------------
+
+    if "coverage" in gate_features:
+
+        if coverage_stats is None:
+            signal_text.append(
+                "COVERAGE: unavailable"
+            )
+
+        else:
+
+            core_coverage = coverage_stats.get(
+                "core_coverage",
+                0.0
+            )
+
+            weighted_coverage = coverage_stats.get(
+                "weighted_coverage",
+                0.0
+            )
+
+            requirements = []
+
+            for item in coverage_stats.get(
+                "coverage",
+                []
+            ):
+                requirements.append(
+                    f"- {item['id']}: "
+                    f"{item['status']} "
+                    f"(confidence={item['confidence']:.2f})"
+                )
+
+            signal_text.append(
+                f"""
+COVERAGE:
+
+Core coverage:
+{core_coverage:.2f}
+
+Weighted coverage:
+{weighted_coverage:.2f}
+
+Requirement status:
+{chr(10).join(requirements)}
+"""
+            )
+
+    # ----------------------------------------------------------
+    # Novelty
+    # ----------------------------------------------------------
+
+    if "novelty" in gate_features:
+
+        if evidence_stats is None:
+            signal_text.append(
+                "SEMANTIC NOVELTY: unavailable"
+            )
+
+        else:
+            signal_text.append(
+                f"""
+SEMANTIC NOVELTY:
+{evidence_stats.get(
+    "semantic_novelty",
+    None
+)}
+"""
+            )
+
+    # ----------------------------------------------------------
+    # Redundancy
+    # ----------------------------------------------------------
+
+    if "redundancy" in gate_features:
+
+        if evidence_stats is None:
+            signal_text.append(
+                "SEMANTIC REDUNDANCY: unavailable"
+            )
+
+        else:
+            signal_text.append(
+                f"""
+SEMANTIC REDUNDANCY:
+{evidence_stats.get(
+    "semantic_redundancy",
+    None
+)}
+"""
+            )
+
+    signal_text = "\n".join(signal_text)
+
+    # ==========================================================
+    # Feature instructions
+    # ==========================================================
+
+    feature_instructions = []
+
+    if "confidence" in gate_features:
+        feature_instructions.append(
+            """
+CONFIDENCE:
+Estimate how strongly the retrieved evidence supports
+a reliable answer.
+"""
+        )
+
+    if "answerable" in gate_features:
+        feature_instructions.append(
+            """
+ANSWERABILITY:
+Determine whether the current evidence is sufficient
+to answer the question reliably without more retrieval.
+"""
+        )
+
+    if "coverage" in gate_features:
+        feature_instructions.append(
+            """
+REQUIREMENT COVERAGE:
+Use the requirement coverage information.
+
+A high confidence score must NOT override an important
+core requirement that is still MISSING or PARTIAL.
+
+Pay particular attention to high-importance requirements.
+"""
+        )
+
+    if "novelty" in gate_features:
+        feature_instructions.append(
+            """
+SEMANTIC NOVELTY:
+Determine whether the latest retrieval appears to add
+meaningfully different information.
+
+Very low novelty suggests additional retrieval may be
+becoming repetitive.
+"""
+        )
+
+    if "redundancy" in gate_features:
+        feature_instructions.append(
+            """
+SEMANTIC REDUNDANCY:
+High redundancy means the newly retrieved evidence is
+largely similar to evidence already available and
+additional retrieval may have diminishing value.
+"""
+        )
+
+    feature_instructions = "\n".join(
+        feature_instructions
+    )
+
+    # ==========================================================
+    # Prompt
+    # ==========================================================
 
     gate_prompt = f"""
-You are a strict medical QA stopping controller.
+You are a strict medical QA retrieval stopping controller.
 
 QUESTION:
 {question}
@@ -34,110 +230,215 @@ QUESTION:
 RETRIEVED EVIDENCE:
 {context}
 
+ACTIVE GATE FEATURES:
+{", ".join(gate_features)}
+
+{signal_text}
+
 TASK:
-Determine whether the retrieved evidence is sufficient to answer
-the medical question reliably.
 
-The retrieval process follows Question-Only Retrieval (QOR).
-Therefore, you must judge sufficiency using ONLY:
+Decide whether another retrieval iteration is necessary.
 
-1. The question
-2. The retrieved evidence
+The retrieval system follows Question-Only Retrieval (QOR).
 
-Do NOT use the answer choices.
-Do NOT rely on outside medical knowledge to fill missing information.
+Therefore:
 
-The purpose of this controller is NOT to produce the final answer.
-Its only purpose is to decide whether another retrieval iteration
-is necessary.
+1. Use only the question and retrieved evidence.
+2. Do NOT use answer choices.
+3. Do NOT rely on outside medical knowledge.
+4. Do NOT produce the final answer.
+5. Your job is ONLY to determine whether additional retrieval
+   would materially improve the evidence available for solving
+   the question.
 
-Definitions:
+{feature_instructions}
 
-answerable=true:
-The retrieved evidence contains enough relevant and specific
-information that a medical QA system could reliably answer the
-question without needing additional retrieval.
+STOP means:
 
-answerable=false:
-Important information is missing, evidence is too general,
-evidence is contradictory, or additional retrieval would
-reasonably improve the answer.
+Additional retrieval is unlikely to materially improve
+the reliability of the answer.
 
-Confidence:
-0-20   = evidence is essentially insufficient
-21-40  = weak evidence
-41-60  = partial evidence
-61-80  = useful evidence but important uncertainty remains
-81-90  = strong evidence
-91-100 = very strong/direct evidence
+CONTINUE means:
+
+Additional retrieval is likely to materially improve
+the evidence available for answering the question.
 
 IMPORTANT:
-- High confidence alone does NOT mean STOP.
-- Only answerable=true AND confidence >= the threshold should STOP.
-- If the evidence does not directly address an important part
-  of the question, prefer CONTINUE.
-- Be conservative.
+
+High confidence by itself is NOT sufficient if other enabled
+signals indicate important evidence gaps.
+
+Be conservative.
 
 Return ONLY valid JSON:
 
 {{
     "answerable": true,
     "confidence": 90,
-    "reasoning": "Brief explanation of why the retrieved evidence is or is not sufficient."
+    "stop": true,
+    "reasoning": "Brief explanation."
 }}
 """
 
-    messages = [
-        {
-            "role": "user",
-            "content": gate_prompt
-        }
-    ]
-
     try:
-        response = medrag_instance.generate(messages).strip()
 
-        # Remove markdown code fences
-        response = re.sub(r"^```json\s*", "", response)
-        response = re.sub(r"^```\s*", "", response)
-        response = re.sub(r"\s*```$", "", response)
+        response = medrag_instance.generate(
+            [
+                {
+                    "role": "user",
+                    "content": gate_prompt
+                }
+            ]
+        )
+
+        if response is None:
+            raise ValueError(
+                "Empty gate response."
+            )
+
+        response = str(response).strip()
+
+        # Remove code fences
+        response = re.sub(
+            r"^```json\s*",
+            "",
+            response,
+            flags=re.IGNORECASE
+        )
+
+        response = re.sub(
+            r"^```\s*",
+            "",
+            response
+        )
+
+        response = re.sub(
+            r"\s*```$",
+            "",
+            response
+        )
+
         response = response.strip()
 
-        result = json.loads(response)
+        # Parse JSON
+        try:
+            result = json.loads(response)
+        except json.JSONDecodeError:
 
-        answerable_value = result.get("answerable", False)
+            start = response.find("{")
+            end = response.rfind("}")
 
-        # Handle true/false returned as string
-        if isinstance(answerable_value, str):
-            answerable = answerable_value.strip().lower() == "true"
+            if start == -1 or end == -1:
+                raise
+
+            result = json.loads(
+                response[start:end + 1]
+            )
+
+        # ------------------------------------------------------
+        # Answerability
+        # ------------------------------------------------------
+
+        answerable_value = result.get(
+            "answerable",
+            False
+        )
+
+        if isinstance(
+            answerable_value,
+            str
+        ):
+            answerable = (
+                answerable_value.strip().lower()
+                == "true"
+            )
         else:
-            answerable = bool(answerable_value)
+            answerable = bool(
+                answerable_value
+            )
+
+        # ------------------------------------------------------
+        # Confidence
+        # ------------------------------------------------------
 
         confidence = float(
-            result.get("confidence", 0)
+            result.get(
+                "confidence",
+                0
+            )
         )
 
-        confidence = max(0, min(100, confidence))
-
-        reasoning = str(
-            result.get("reasoning", "")
+        confidence = max(
+            0.0,
+            min(
+                100.0,
+                confidence
+            )
         )
 
+        # ------------------------------------------------------
+        # Model stop decision
+        # ------------------------------------------------------
+
+        model_stop = result.get(
+            "stop",
+            False
+        )
+
+        if isinstance(
+            model_stop,
+            str
+        ):
+            model_stop = (
+                model_stop.strip().lower()
+                == "true"
+            )
+        else:
+            model_stop = bool(
+                model_stop
+            )
+
+        # Final decision
         should_stop = (
-            answerable
+            model_stop
+            and answerable
             and confidence >= threshold
         )
 
+        reasoning = str(
+            result.get(
+                "reasoning",
+                ""
+            )
+        )
+
+        # ------------------------------------------------------
+        # Diagnostics
+        # ------------------------------------------------------
+
         print(
-            f"   [Gate Answerable]: {answerable}"
+            f"   [Gate Features]: "
+            f"{gate_features}"
         )
 
         print(
-            f"   [Gate Confidence]: {confidence:.1f}%"
+            f"   [Gate Answerable]: "
+            f"{answerable}"
         )
 
         print(
-            f"   [Gate Threshold]: {threshold}%"
+            f"   [Gate Confidence]: "
+            f"{confidence:.1f}%"
+        )
+
+        print(
+            f"   [Gate Threshold]: "
+            f"{threshold}%"
+        )
+
+        print(
+            f"   [Gate Model Stop]: "
+            f"{model_stop}"
         )
 
         print(
@@ -146,7 +447,8 @@ Return ONLY valid JSON:
         )
 
         print(
-            f"   [Gate Reasoning]: {reasoning}"
+            f"   [Gate Reasoning]: "
+            f"{reasoning}"
         )
 
         return (
@@ -158,12 +460,17 @@ Return ONLY valid JSON:
 
     except Exception as e:
 
-        print(f"   [Gate Error]: {e}")
-        print("   Defaulting to CONTINUE.")
+        print(
+            f"   [Gate Error]: {e}"
+        )
+
+        print(
+            "   Defaulting to CONTINUE."
+        )
 
         return (
             False,
-            0,
+            0.0,
             False,
             f"Gate error: {e}"
         )
@@ -196,10 +503,23 @@ def choose_query_budget(
 
 class AdaptiveMedRAG(MedRAG):
 
-    def adaptive_answer(self, question, options=None, k=32, rrf_k=100, save_path=None, max_iterations=4,  initial_queries=2,confidence_threshold=85, **kwargs):
+    def adaptive_answer(
+    self,
+    question,
+    options=None,
+    k=32,
+    rrf_k=100,
+    save_path=None,
+    max_iterations=4,
+    initial_queries=2,
+    confidence_threshold=85,
+    use_planner=False,
+    use_planner_budget=False,
+    use_coverage=False, use_novelty=False, **kwargs):    
         """
         The spliced iterative loop with the dynamic stopping gate.
         """
+
         if options is not None:
             options_str = '\n'.join([key+". "+options[key] for key in sorted(options.keys())])
         else:
@@ -207,9 +527,20 @@ class AdaptiveMedRAG(MedRAG):
 
         QUESTION_PROMPT = f"Here is the question:\n{question}\n\n{options_str}"
 
-        evidence_tracker = EvidenceTracker(
-            self.retrieval_system
-        )
+        # ==========================================================
+        # COMPONENT CONFIGURATION
+        # ==========================================================
+
+        planner = None
+        coverage_analyzer = None
+        evidence_tracker = None
+
+        question_plan = None
+
+        core_requirements = []
+        supporting_constraints = []
+
+        coverage_history = []
         context = ""
         last_context = None
         saved_messages = [{"role": "system", "content": self.templates["i_medrag_system"]}]
@@ -219,11 +550,121 @@ class AdaptiveMedRAG(MedRAG):
         answerable = False
         gate_reasoning = ""
         stopping_iteration = max_iterations
-        query_budget = initial_queries
+        coverage_history = []
 
-        # Track what happened at every iteration
+            # Track what happened at every iteration
         query_budget_history = []
         actual_query_count = 0
+        successful_retrieval_count = 0
+        failed_retrieval_count = 0
+
+        # ----------------------------------------------------------
+        # Which gate information will actually be used?
+        # ----------------------------------------------------------
+
+        gate_features = [
+            "confidence",
+            "answerable"
+        ]
+
+        if use_coverage:
+            gate_features.append("coverage")
+
+        if use_novelty:
+            gate_features.append("novelty")
+            gate_features.append("redundancy")
+
+
+        # ----------------------------------------------------------
+        # Question planner
+        # ----------------------------------------------------------
+
+        if use_planner:
+
+            planner = QuestionPlanner(self)
+
+            question_plan = planner.plan(question)
+
+            core_requirements = (
+                question_plan["core_requirements"]
+            )
+
+            supporting_constraints = (
+                question_plan["supporting_constraints"]
+            )
+
+            print("\n[Question Plan]")
+
+            print(
+                f"   Complexity: "
+                f"{question_plan['complexity']:.2f}"
+            )
+
+            print(
+                f"   Planner Initial Budget: "
+                f"{question_plan['initial_query_budget']}"
+            )
+
+            print("\n   Core Requirements:")
+
+            for req in core_requirements:
+
+                print(
+                    f"      {req['id']}: "
+                    f"{req['description']} "
+                    f"(importance={req['importance']:.2f})"
+                )
+
+
+        # ----------------------------------------------------------
+        # Initial query budget
+        # ----------------------------------------------------------
+
+        if use_planner and use_planner_budget:
+
+            query_budget = (
+                question_plan["initial_query_budget"]
+            )
+
+        else:
+
+            query_budget = initial_queries
+
+
+        print(
+            f"\n   [Initial Query Budget]: "
+            f"{query_budget}"
+        )
+
+
+        # ----------------------------------------------------------
+        # Coverage analyzer
+        # ----------------------------------------------------------
+
+        if use_coverage:
+
+            if not use_planner:
+                raise ValueError(
+                    "Coverage requires the planner because "
+                    "coverage needs core requirements."
+                )
+
+            coverage_analyzer = (
+                EvidenceCoverageAnalyzer(self)
+            )
+
+
+        # ----------------------------------------------------------
+        # Evidence tracker
+        # ----------------------------------------------------------
+
+        if use_novelty:
+
+            evidence_tracker = EvidenceTracker(
+                self.retrieval_system
+            )
+
+
 
         # 2. We use a failsafe max_iterations to prevent infinite API billing
         for i in range(max_iterations + 3):
@@ -286,8 +727,25 @@ class AdaptiveMedRAG(MedRAG):
                 saved_messages.append(messages[-1])
 
                 # We return exactly how many iterations it took to prove early stopping!
-                return messages[-1]["content"], saved_messages, stopping_iteration ,confidence,query_budget_history, actual_query_count, evidence_tracker.history
-
+                return (
+                    messages[-1]["content"],
+                    saved_messages,
+                    stopping_iteration,
+                    confidence,
+                    query_budget_history,
+                    actual_query_count,
+                    successful_retrieval_count,
+                    failed_retrieval_count,
+                    evidence_tracker.history if evidence_tracker else [],
+                    coverage_history,
+                    {
+                        "use_planner": use_planner,
+                        "use_planner_budget": use_planner_budget,
+                        "use_coverage": use_coverage,
+                        "use_novelty": use_novelty,
+                        "question_plan": question_plan
+                    }
+                )
             # --- EXTRACT QUERIES & RETRIEVE ---
             elif "## Queries" in last_content:
                 messages = messages[:-1]
@@ -310,32 +768,99 @@ class AdaptiveMedRAG(MedRAG):
                 # Retrieve documents for each query
                 iteration_doc_ids = []
                 for q in action_list:
-                    if q.strip() == "": continue
+
+                    if q.strip() == "":
+                        continue
+
                     try:
-                        rag_result, retrieved_snippets, scores = self.medrag_answer(q, k=k,rrf_k=rrf_k, **kwargs)
+                        rag_result, retrieved_snippets, scores = self.medrag_answer(
+                            q,
+                            k=k,
+                            rrf_k=rrf_k,
+                            **kwargs
+                        )
+
+                        successful_retrieval_count += 1
+
                         for doc in retrieved_snippets:
                             iteration_doc_ids.append(doc["id"])
+
                         context += f"\n\nQuery: {q}\nAnswer: {rag_result}"
                         context = context.strip()
+
                     except Exception as E:
+                        failed_retrieval_count += 1
                         print(f"Retrieval Error: {E}")
-                evidence_stats = evidence_tracker.update(
-                    iteration_doc_ids
-                )
-                print(
-                    f"   [Document Novelty]: "
-                    f"{evidence_stats['document_novelty']}"
-                )
+                evidence_stats = {
+                    "document_novelty": None,
+                    "semantic_novelty": None,
+                    "semantic_redundancy": None
+                }
 
-                print(
-                    f"   [Semantic Novelty]: "
-                    f"{evidence_stats['semantic_novelty']}"
-                )
+                if use_novelty:
 
-                print(
-                    f"   [Semantic Redundancy]: "
-                    f"{evidence_stats['semantic_redundancy']}"
-                )
+                    evidence_stats = evidence_tracker.update(
+                        iteration_doc_ids
+                    )
+
+                    print(
+                        f"   [Document Novelty]: "
+                        f"{evidence_stats['document_novelty']}"
+                    )
+
+                    print(
+                        f"   [Semantic Novelty]: "
+                        f"{evidence_stats['semantic_novelty']}"
+                    )
+
+                    print(
+                        f"   [Semantic Redundancy]: "
+                        f"{evidence_stats['semantic_redundancy']}"
+                    )
+                coverage_stats = {
+                    "coverage": [],
+                    "constraint_coverage": [],
+                    "core_coverage": None,
+                    "weighted_coverage": None,
+                    "reasoning": ""
+                }
+
+                if use_coverage:
+
+                    coverage_stats = coverage_analyzer.analyze(
+                        question=question,
+                        core_requirements=core_requirements,
+                        supporting_constraints=supporting_constraints,
+                        context=context
+                    )
+
+                    coverage_history.append(
+                        coverage_stats
+                    )
+
+                    print(
+                        f"   [Core Coverage]: "
+                        f"{coverage_stats['core_coverage']:.2f}"
+                    )
+
+                    print(
+                        f"   [Weighted Coverage]: "
+                        f"{coverage_stats['weighted_coverage']:.2f}"
+                    )
+
+                    print(
+                        "   [Requirement Coverage]:"
+                    )
+
+                    for item in coverage_stats["coverage"]:
+
+                        print(
+                            f"      {item['id']} | "
+                            f"{item['status']} | "
+                            f"{item['confidence']:.2f}"
+                        )
+
+                
 
                 # 5. THE GATE: Check if the newly retrieved context is sufficient
                 print(f"\n--- Checking Gate after Iteration {i+1} ---")
@@ -346,7 +871,10 @@ class AdaptiveMedRAG(MedRAG):
                         self,
                         question,
                         context,
-                        threshold=confidence_threshold
+                        threshold=confidence_threshold,
+                        gate_features=gate_features,
+                        coverage_stats=coverage_stats,
+                        evidence_stats=evidence_stats
                     )
                 )
 
@@ -357,6 +885,7 @@ class AdaptiveMedRAG(MedRAG):
                     query_budget = 0
 
                 else:
+
 
                     query_budget = choose_query_budget(
                         confidence=confidence,
@@ -373,5 +902,22 @@ class AdaptiveMedRAG(MedRAG):
                 messages.append(response_message)
                 continue
 
-        return messages[-1]["content"], saved_messages, max_iterations, confidence,query_budget_history, actual_query_count, evidence_tracker.history
-
+        return (
+            messages[-1]["content"],
+            saved_messages,
+            max_iterations,
+            confidence,
+            query_budget_history,
+            actual_query_count,
+            successful_retrieval_count,
+            failed_retrieval_count,
+            evidence_tracker.history if evidence_tracker else [],
+            coverage_history,
+            {
+                "use_planner": use_planner,
+                "use_planner_budget": use_planner_budget,
+                "use_coverage": use_coverage,
+                "use_novelty": use_novelty,
+                "question_plan": question_plan
+            }
+        )
