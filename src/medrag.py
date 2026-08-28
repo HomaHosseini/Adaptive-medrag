@@ -16,6 +16,7 @@ sys.path.append("src")
 from utils import RetrievalSystem, DocExtracter
 from template import *
 
+from utils import robust_parse_json
 from config import config
 
 openai.api_type = openai.api_type or os.getenv("OPENAI_API_TYPE") or config.get("api_type")
@@ -391,8 +392,9 @@ class MedRAG:
                             "content": f"Parse the following passage and extract the queries as a list: {last_content}.\n\nPresent the queries as they are. DO NOT merge or break down queries. Output the list of queries in JSON format: {{\"output\": [\"query 1\", ..., \"query N\"]}}",
                         }
                     ], **kwargs)
-                    action_str = re.search(r"output\": (\[.*\])", action_str, re.DOTALL).group(1)
-                    action_list = [re.sub(r'^\d+\.\s*', '', s.strip()) for s in eval(action_str)]
+                    parsed_json = robust_parse_json(action_str)
+                    raw_queries = parsed_json.get("output", [])
+                    action_list = [re.sub(r'^\d+\.\s*', '', str(s).strip()) for s in raw_queries]
                 except Exception as E:
                     print("Error parsing action list. Continue with next iteration.")
                     error_class = E.__class__.__name__

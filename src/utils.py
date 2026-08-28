@@ -9,6 +9,8 @@ import tqdm
 import numpy as np
 import requests
 import zipfile
+import json
+import re
 
 corpus_names = {
     "PubMed": ["pubmed"],
@@ -621,3 +623,24 @@ class DocExtracter:
                 item = self.dict[i] if type(i) == str else self.dict[i["id"]]
                 output.append(json.loads(open(os.path.join(self.db_dir, item["fpath"])).read().strip().split('\n')[item["index"]]))
         return output
+
+
+
+def robust_parse_json(response_text):
+    """Safely extracts and parses JSON from LLM outputs."""
+    # 1. Strip markdown code blocks if the LLM added them
+    match = re.search(r"```(?:json)?\n(.*?)```", response_text, re.DOTALL)
+    if match:
+        response_text = match.group(1)
+    
+    # 2. Fix common syntax errors (like trailing commas before brackets/braces)
+    response_text = re.sub(r',\s*([\]}])', r'\1', response_text)
+    
+    try:
+        return json.loads(response_text)
+    except json.JSONDecodeError as e:
+        try:
+            import json_repair
+            return json_repair.loads(response_text)
+        except ImportError:
+            raise ValueError(f"JSON parsing failed and json_repair is not installed. Raw: {response_text}")

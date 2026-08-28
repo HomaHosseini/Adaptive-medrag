@@ -6,7 +6,7 @@ import re, ast
 from .evidence_tracker import EvidenceTracker
 from .evidence_coverage import EvidenceCoverageAnalyzer
 from .question_planner import QuestionPlanner
-
+from .utils import robust_parse_json
 def check_stopping_gate(
     medrag_instance,
     question,
@@ -322,19 +322,11 @@ Return ONLY valid JSON:
 
         # Parse JSON
         try:
-            result = json.loads(response)
-        except json.JSONDecodeError:
-
-            start = response.find("{")
-            end = response.rfind("}")
-
-            if start == -1 or end == -1:
-                raise
-
-            result = json.loads(
-                response[start:end + 1]
-            )
-
+            result = robust_parse_json(response)
+        except Exception as e:
+            print(f"Failed to parse gate JSON: {e}")
+            raise
+        
         # ------------------------------------------------------
         # Answerability
         # ------------------------------------------------------
