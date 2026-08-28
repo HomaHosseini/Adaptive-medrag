@@ -148,27 +148,38 @@ class MedRAG:
         generate response given messages
         '''
         if "arvan" in self.llm_name.lower():
+            max_retries = 3
+            base_delay = 2
 
-            response = requests.post(
-                f"{self.api_endpoint}/chat/completions",
-                headers={
-                    "Authorization": f"apikey {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "max_tokens": kwargs.get("max_tokens", 2048),
-                    "temperature": kwargs.get("temperature", 0.0),
-                },
-                timeout=(60, 180),
-            )
+            for attempt in range(max_retries):
+                try:
+                    response = requests.post(
+                        f"{self.api_endpoint}/chat/completions",
+                        headers={
+                            "Authorization": f"apikey {self.api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": self.model,
+                            "messages": messages,
+                            "max_tokens": kwargs.get("max_tokens", 2048),
+                            "temperature": kwargs.get("temperature", 0.0),
+                        },
+                        timeout=(60, 180),
+                    )
 
-            response.raise_for_status()
+                    response.raise_for_status()
+                    data = response.json()
+                    return data["choices"][0]["message"]["content"]
 
-            data = response.json()
-
-            return data["choices"][0]["message"]["content"]
+                except requests.exceptions.RequestException as e:
+                    if attempt == max_retries - 1:
+                        print(f"CRITICAL: Arvan API failed after {max_retries} attempts. Error: {e}")
+                        raise
+                    
+                    delay = base_delay * (2 ** attempt)
+                    print(f"Network error: {e}. Retrying Arvan API in {delay} seconds...")
+                    time.sleep(delay)
         elif "openai" in self.llm_name.lower():
             ans = openai_client(
                 model=self.model,
