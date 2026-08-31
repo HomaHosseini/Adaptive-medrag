@@ -4,29 +4,32 @@ import re
 
 class EvidenceCoverageAnalyzer:
     """
-    Evaluates how well accumulated retrieved evidence covers
-    the fixed requirements produced by QuestionPlanner.
+    Evaluates whether accumulated retrieved evidence supports the
+    information needs identified by QuestionPlanner.
 
-    The analyzer:
-        - sees the question
-        - sees core requirements
-        - sees supporting constraints
-        - sees accumulated retrieved evidence
+    The analyzer sees:
+        - the original question
+        - the question target
+        - information needs
+        - decision-critical constraints
+        - relationships to establish
+        - accumulated retrieved evidence
 
-    It does NOT:
+    The analyzer does NOT:
         - see answer choices
-        - answer the medical question
+        - produce the final answer
         - decide STOP / CONTINUE
         - generate queries
-        - calculate its own aggregate scores via the LLM
+        - use planner hypotheses as evidence
 
-    The LLM only evaluates each requirement as:
+    The LLM evaluates each information need independently as:
+
         COVERED
         PARTIAL
         MISSING
         CONTRADICTED
 
-    Python calculates the aggregate coverage scores.
+    Python calculates aggregate coverage scores.
     """
 
     VALID_STATUSES = {
@@ -53,21 +56,29 @@ class EvidenceCoverageAnalyzer:
     def analyze(
         self,
         question,
-        core_requirements,
-        supporting_constraints,
+        question_target,
+        information_needs,
+        constraints,
+        relationships,
         context,
     ):
         """
-        Analyze evidence coverage.
+        Analyze whether accumulated evidence covers the information
+        required to resolve the question.
 
         Returns:
-            {
-                "coverage": [...],
-                "constraint_coverage": [...],
-                "core_coverage": float,
-                "weighted_coverage": float,
-                "reasoning": str
-            }
+
+        {
+            "coverage": [...],
+            "constraint_coverage": [...],
+            "core_coverage": float,
+            "weighted_coverage": float,
+            "reasoning": str
+        }
+
+        Note:
+            "core_coverage" is retained as a compatibility name.
+            It now means information-need coverage.
         """
 
         # ------------------------------------------------------
@@ -75,54 +86,101 @@ class EvidenceCoverageAnalyzer:
         # ------------------------------------------------------
 
         if not context or not context.strip():
+
             return {
                 "coverage": [],
                 "constraint_coverage": [],
                 "core_coverage": 0.0,
                 "weighted_coverage": 0.0,
-                "reasoning": "No retrieved evidence available.",
+                "reasoning":
+                    "No retrieved evidence available.",
             }
 
         # ------------------------------------------------------
-        # No requirements
+        # No information needs
         # ------------------------------------------------------
 
-        if not core_requirements:
+        if not information_needs:
+
             return {
                 "coverage": [],
                 "constraint_coverage": [],
                 "core_coverage": 0.0,
                 "weighted_coverage": 0.0,
-                "reasoning": "No core requirements were provided.",
+                "reasoning":
+                    "No information needs were provided.",
             }
 
-        core_text = self._format_items(core_requirements)
-        constraint_text = self._format_items(
-            supporting_constraints
+        # ------------------------------------------------------
+        # Format planner information
+        # ------------------------------------------------------
+
+        information_need_text = (
+            self._format_information_needs(
+                information_needs
+            )
         )
+
+        constraint_text = (
+            self._format_strings(
+                constraints
+            )
+        )
+
+        relationship_text = (
+            self._format_strings(
+                relationships
+            )
+        )
+
+        # ======================================================
+        # PROMPT
+        # ======================================================
 
         prompt = f"""
 You are a strict medical evidence coverage analyzer.
 
-Your task is NOT to answer the medical question.
+Your job is to evaluate whether the retrieved evidence contains
+the information needed to resolve the medical question.
 
-Your task is to evaluate whether the accumulated retrieved evidence
-covers the information requirements identified before retrieval.
+You are NOT the final answerer.
 
-QUESTION:
+Do NOT answer the question.
+
+==================================================
+QUESTION
+==================================================
+
 {question}
 
 ==================================================
-CORE REQUIREMENTS
+QUESTION TARGET
 ==================================================
 
-{core_text}
+{question_target}
+
+The question target describes what the downstream system still
+needs to determine.
+
+Do not treat the question target itself as evidence.
 
 ==================================================
-SUPPORTING CONSTRAINTS
+INFORMATION NEEDS
+==================================================
+
+{information_need_text}
+
+==================================================
+DECISION-CRITICAL CONSTRAINTS
 ==================================================
 
 {constraint_text}
+
+==================================================
+RELATIONSHIPS TO ESTABLISH
+==================================================
+
+{relationship_text}
 
 ==================================================
 ACCUMULATED RETRIEVED EVIDENCE
@@ -131,51 +189,129 @@ ACCUMULATED RETRIEVED EVIDENCE
 {context}
 
 ==================================================
-TASK
+MAIN TASK
 ==================================================
 
-Evaluate EVERY CORE REQUIREMENT individually.
+Evaluate EVERY INFORMATION NEED independently.
+
+For each information need determine whether the retrieved evidence
+is sufficient to support it.
 
 Use exactly one status:
 
 COVERED:
-The retrieved evidence directly and sufficiently supports
-the requirement.
+The evidence directly and sufficiently supports the complete
+information need.
 
 PARTIAL:
-The evidence provides useful support, but an important part
-of the requirement remains uncertain or unsupported.
+The evidence provides useful support, but an important part of
+the information need remains uncertain, indirect, or unsupported.
 
 MISSING:
-The evidence does not provide sufficient information
-to support the requirement.
+The evidence does not provide sufficient information to support
+the information need.
 
 CONTRADICTED:
-The retrieved evidence contains information that directly
-conflicts with the requirement.
+The retrieved evidence contains information that directly conflicts
+with the information need.
 
-IMPORTANT RULES:
+==================================================
+IMPORTANT RULES
+==================================================
 
-- Judge ONLY the retrieved evidence.
-- Do NOT use outside medical knowledge to fill gaps.
-- Do NOT use answer choices.
-- Do NOT infer evidence that is not present.
-- Be conservative.
-- Evaluate every requirement independently.
-- Do not combine multiple requirements into one judgment.
-- Do not omit any requirement.
+1. Judge ONLY the retrieved evidence.
 
-For every core requirement return:
+2. Do NOT use outside medical knowledge to fill gaps.
 
-- id
-- status
-- confidence from 0 to 1
-- evidence_summary
+3. Do NOT use answer choices.
 
-Also evaluate every supporting constraint using the same statuses.
+4. Do NOT answer the medical question.
 
-Do NOT calculate overall coverage scores.
-Python will calculate those values.
+5. Do NOT assume that a statement is true merely because it appears
+   in the question.
+
+6. Do NOT treat the planner's hypotheses as evidence.
+
+7. Do NOT treat the question target as evidence.
+
+8. Evaluate EVERY information need independently.
+
+9. Do NOT combine multiple information needs into one judgment.
+
+10. Do NOT mark a requirement COVERED simply because a related
+    medical topic is mentioned.
+
+11. Evidence must support the actual decision or relationship
+    represented by the information need.
+
+12. A generic fact about a disease is insufficient if the information
+    need requires a patient-specific relationship or discrimination.
+
+13. Distinguish between:
+       "the evidence mentions X"
+    and
+       "the evidence establishes the relationship required by X."
+
+==================================================
+EXAMPLE
+==================================================
+
+Information need:
+
+"Determine which stated historical exposure is associated with
+the established condition."
+
+Evidence:
+
+"Radiation therapy has been associated with increased risk of
+some malignancies."
+
+This may provide support, but it does NOT automatically prove
+that radiation is the relevant factor for this question unless
+the evidence sufficiently supports the required relationship.
+
+Similarly:
+
+Evidence saying:
+
+"Non-Hodgkin lymphoma can involve lymph nodes."
+
+does NOT establish which historical exposure is responsible.
+
+==================================================
+PATIENT-SPECIFIC INFORMATION
+==================================================
+
+Use the decision-critical constraints and relationships only to
+understand what kind of evidence is needed.
+
+Do NOT mark a constraint COVERED merely because the same fact
+appears in the original question.
+
+A constraint is COVERED only when the retrieved evidence provides
+meaningful support for that constraint when it is relevant to
+the unresolved decision.
+
+==================================================
+CONFIDENCE
+==================================================
+
+For each information need provide confidence from 0 to 1.
+
+Interpretation:
+
+0.0 - 0.2 = essentially unsupported
+0.2 - 0.4 = weak support
+0.4 - 0.6 = partial support
+0.6 - 0.8 = useful but incomplete support
+0.8 - 1.0 = strong/direct support
+
+Confidence describes confidence in the coverage judgment,
+NOT confidence in the final medical answer.
+
+==================================================
+OUTPUT
+==================================================
 
 Return ONLY valid JSON.
 
@@ -184,10 +320,11 @@ Use exactly this structure:
 {{
     "coverage": [
         {{
-            "id": "R1",
+            "id": "N1",
             "status": "COVERED",
             "confidence": 0.95,
-            "evidence_summary": "The evidence directly supports this requirement."
+            "evidence_summary":
+                "The retrieved evidence directly supports this information need."
         }}
     ],
 
@@ -196,33 +333,49 @@ Use exactly this structure:
             "id": "C1",
             "status": "PARTIAL",
             "confidence": 0.65,
-            "evidence_summary": "The evidence partially supports this constraint."
+            "evidence_summary":
+                "The retrieved evidence provides partial support for this constraint."
         }}
     ],
 
-    "reasoning": "Brief explanation of the overall evidence coverage."
+    "reasoning":
+        "Brief explanation of the overall evidence coverage."
 }}
+
+IMPORTANT:
+
+- Return one record for EVERY information need.
+- Return one record for every supplied constraint.
+- Use the exact IDs supplied in the input.
+- Do NOT calculate aggregate coverage.
+- Python will calculate aggregate scores.
 """
 
         try:
-            response = self.medrag.generate(
-                [
-                    {
-                        "role": "user",
-                        "content": prompt,
-                    }
-                ]
-            )
+
+            response = self.medrag.generate([
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ])
 
             if response is None:
                 raise ValueError(
                     "Coverage model returned None."
                 )
 
-            response = str(response).strip()
+            response = str(
+                response
+            ).strip()
 
-            print("\n[Coverage Raw Response]")
-            print(repr(response))
+            print(
+                "\n[Coverage Raw Response]"
+            )
+
+            print(
+                repr(response)
+            )
 
             if not response:
                 raise ValueError(
@@ -233,44 +386,52 @@ Use exactly this structure:
                 response
             )
 
-            # --------------------------------------------------
-            # Parse core coverage
-            # --------------------------------------------------
+            # ==================================================
+            # INFORMATION-NEED COVERAGE
+            # ==================================================
 
             raw_coverage = result.get(
                 "coverage",
                 []
             )
 
-            cleaned_coverage = self._clean_results(
-                raw_coverage
+            cleaned_coverage = (
+                self._clean_results(
+                    raw_coverage
+                )
             )
 
-            # --------------------------------------------------
-            # Parse supporting constraints
-            # --------------------------------------------------
+            # ==================================================
+            # CONSTRAINT COVERAGE
+            # ==================================================
 
-            raw_constraints = result.get(
-                "constraint_coverage",
-                []
+            raw_constraints = (
+                result.get(
+                    "constraint_coverage",
+                    []
+                )
             )
 
-            cleaned_constraints = self._clean_results(
-                raw_constraints
+            cleaned_constraints = (
+                self._clean_results(
+                    raw_constraints
+                )
             )
 
-            # --------------------------------------------------
-            # Calculate aggregate scores in Python
-            # --------------------------------------------------
+            # ==================================================
+            # PYTHON AGGREGATION
+            # ==================================================
 
-            core_coverage = self._calculate_core_coverage(
-                core_requirements,
-                cleaned_coverage
+            core_coverage = (
+                self._calculate_core_coverage(
+                    information_needs,
+                    cleaned_coverage
+                )
             )
 
             weighted_coverage = (
                 self._calculate_weighted_coverage(
-                    core_requirements,
+                    information_needs,
                     cleaned_coverage
                 )
             )
@@ -283,11 +444,20 @@ Use exactly this structure:
             ).strip()
 
             return {
-                "coverage": cleaned_coverage,
-                "constraint_coverage": cleaned_constraints,
-                "core_coverage": core_coverage,
-                "weighted_coverage": weighted_coverage,
-                "reasoning": reasoning,
+                "coverage":
+                    cleaned_coverage,
+
+                "constraint_coverage":
+                    cleaned_constraints,
+
+                "core_coverage":
+                    core_coverage,
+
+                "weighted_coverage":
+                    weighted_coverage,
+
+                "reasoning":
+                    reasoning,
             }
 
         except Exception as e:
@@ -301,110 +471,175 @@ Use exactly this structure:
                 "constraint_coverage": [],
                 "core_coverage": 0.0,
                 "weighted_coverage": 0.0,
-                "reasoning": (
-                    f"Coverage analyzer error: {e}"
-                ),
+                "reasoning":
+                    f"Coverage analyzer error: {e}",
             }
 
     # ==========================================================
     # JSON PARSER
     # ==========================================================
 
-# ==========================================================
-    # JSON PARSER (FIXED & BULLETPROOF)
-    # ==========================================================
-
     @staticmethod
-    def _parse_json_response(response: str) -> dict:
+    def _parse_json_response(
+        response: str
+    ) -> dict:
         """
-        Robustly extract and repair JSON objects from LLM responses.
-        
+        Robustly parse JSON from an LLM response.
+
         Handles:
-            - Markdown code blocks (```json ... ```)
-            - Leading/trailing conversational text
-            - Trailing commas before closing braces (e.g., {"a": 1,})
-            - Malformed quotes/escapes via fallback repairs
+            - plain JSON
+            - markdown code fences
+            - surrounding text
+            - trailing commas
+            - json_repair if installed
         """
+
         if not response or not response.strip():
-            raise ValueError("Response string is empty.")
+            raise ValueError(
+                "Response string is empty."
+            )
 
         text = response.strip()
 
         # ------------------------------------------------------
-        # Tier 1: Extract block inside markdown fences if present
+        # Markdown fences
         # ------------------------------------------------------
-        markdown_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
+
+        markdown_match = re.search(
+            r"```(?:json)?\s*([\s\S]*?)\s*```",
+            text,
+            flags=re.IGNORECASE
+        )
+
         if markdown_match:
-            text = markdown_match.group(1).strip()
+
+            text = (
+                markdown_match
+                .group(1)
+                .strip()
+            )
 
         # ------------------------------------------------------
-        # Tier 2: Extract outermost JSON object bounds ({ ... })
+        # Extract JSON object
         # ------------------------------------------------------
+
         start = text.find("{")
         end = text.rfind("}")
 
-        if start != -1 and end != -1 and end > start:
-            text = text[start : end + 1]
+        if (
+            start != -1
+            and end != -1
+            and end > start
+        ):
 
-        # Attempt 1: Direct standard parse
+            text = text[
+                start:end + 1
+            ]
+
+        # ------------------------------------------------------
+        # Direct JSON
+        # ------------------------------------------------------
+
         try:
-            parsed = json.loads(text)
+
+            parsed = json.loads(
+                text
+            )
+
             if isinstance(parsed, dict):
                 return parsed
+
         except json.JSONDecodeError:
             pass
 
         # ------------------------------------------------------
-        # Tier 3: Regex fix for trailing commas before } or ]
+        # Remove trailing commas
         # ------------------------------------------------------
-        sanitized_text = re.sub(r",\s*([\]}])", r"\1", text)
+
+        sanitized = re.sub(
+            r",\s*([}\]])",
+            r"\1",
+            text
+        )
+
         try:
-            parsed = json.loads(sanitized_text)
+
+            parsed = json.loads(
+                sanitized
+            )
+
             if isinstance(parsed, dict):
                 return parsed
+
         except json.JSONDecodeError:
             pass
 
         # ------------------------------------------------------
-        # Tier 4: Fallback to `json_repair` library (if installed)
+        # json_repair fallback
         # ------------------------------------------------------
+
         try:
-            import json_repair  # Install via: pip install json-repair
-            repaired = json_repair.loads(text)
-            if isinstance(repaired, dict):
-                return repaired
+
+            import json_repair
+
+            parsed = json_repair.loads(
+                text
+            )
+
+            if isinstance(parsed, dict):
+                return parsed
+
         except ImportError:
+
             pass
+
         except Exception:
+
             pass
 
         # ------------------------------------------------------
-        # Fail Safe: Return empty structure instead of crashing pipeline
+        # Hard failure
         # ------------------------------------------------------
-        print(f"[JSON Parse Warning]: Failed to parse structure. Payload raw head:\n{response[:200]}...")
-        return {
-            "coverage": [],
-            "constraint_coverage": [],
-            "reasoning": "Failed to parse JSON response from LLM."
-        }
+
+        print(
+            "[Coverage JSON Parse Warning]"
+        )
+
+        print(
+            f"Raw response:\n"
+            f"{response[:1000]}"
+        )
+
+        raise ValueError(
+            "Unable to parse coverage JSON."
+        )
 
     # ==========================================================
-    # CLEAN LLM RESULT
+    # CLEAN RESULTS
     # ==========================================================
 
-    def _clean_results(self, items):
+    def _clean_results(
+        self,
+        items
+    ):
         """
         Normalize LLM-produced coverage records.
         """
 
-        if not isinstance(items, list):
+        if not isinstance(
+            items,
+            list
+        ):
             return []
 
         cleaned = []
 
         for item in items:
 
-            if not isinstance(item, dict):
+            if not isinstance(
+                item,
+                dict
+            ):
                 continue
 
             item_id = str(
@@ -424,20 +659,27 @@ Use exactly this structure:
                 )
             ).upper().strip()
 
-            if status not in self.VALID_STATUSES:
+            if (
+                status
+                not in self.VALID_STATUSES
+            ):
+
                 status = "MISSING"
 
             try:
+
                 confidence = float(
                     item.get(
                         "confidence",
                         0.0
                     )
                 )
+
             except (
                 TypeError,
                 ValueError
             ):
+
                 confidence = 0.0
 
             confidence = max(
@@ -455,36 +697,41 @@ Use exactly this structure:
                 )
             ).strip()
 
-            cleaned.append(
-                {
-                    "id": item_id,
-                    "status": status,
-                    "confidence": confidence,
-                    "evidence_summary": evidence_summary,
-                }
-            )
+            cleaned.append({
+                "id":
+                    item_id,
+
+                "status":
+                    status,
+
+                "confidence":
+                    confidence,
+
+                "evidence_summary":
+                    evidence_summary,
+            })
 
         return cleaned
 
     # ==========================================================
-    # CORE COVERAGE
+    # CORE / INFORMATION-NEED COVERAGE
     # ==========================================================
 
     def _calculate_core_coverage(
         self,
-        core_requirements,
+        information_needs,
         coverage,
     ):
         """
-        Unweighted fraction of core requirements covered.
+        Unweighted coverage across information needs.
 
-        COVERED = 1
-        PARTIAL = 0.5
-        MISSING = 0
-        CONTRADICTED = 0
+        COVERED      = 1.0
+        PARTIAL      = 0.5
+        MISSING      = 0.0
+        CONTRADICTED = 0.0
         """
 
-        if not core_requirements:
+        if not information_needs:
             return 0.0
 
         coverage_map = {
@@ -494,31 +741,37 @@ Use exactly this structure:
 
         total_score = 0.0
 
-        for requirement in core_requirements:
+        for need in information_needs:
 
-            req_id = str(
-                requirement.get(
+            need_id = str(
+                need.get(
                     "id",
                     ""
                 )
             )
 
             result = coverage_map.get(
-                req_id
+                need_id
             )
 
             if result is None:
+
                 score = 0.0
+
             else:
-                score = self.STATUS_SCORES.get(
-                    result["status"],
-                    0.0
+
+                score = (
+                    self.STATUS_SCORES.get(
+                        result["status"],
+                        0.0
+                    )
                 )
 
             total_score += score
 
-        return total_score / len(
-            core_requirements
+        return (
+            total_score
+            / len(information_needs)
         )
 
     # ==========================================================
@@ -527,17 +780,14 @@ Use exactly this structure:
 
     def _calculate_weighted_coverage(
         self,
-        core_requirements,
+        information_needs,
         coverage,
     ):
         """
-        Importance-weighted coverage.
-
-        This is useful because all requirements do not necessarily
-        have equal importance.
+        Importance-weighted coverage across information needs.
         """
 
-        if not core_requirements:
+        if not information_needs:
             return 0.0
 
         coverage_map = {
@@ -548,26 +798,29 @@ Use exactly this structure:
         weighted_score = 0.0
         total_weight = 0.0
 
-        for requirement in core_requirements:
+        for need in information_needs:
 
-            req_id = str(
-                requirement.get(
+            need_id = str(
+                need.get(
                     "id",
                     ""
                 )
             )
 
             try:
+
                 importance = float(
-                    requirement.get(
+                    need.get(
                         "importance",
                         1.0
                     )
                 )
+
             except (
                 TypeError,
                 ValueError
             ):
+
                 importance = 1.0
 
             importance = max(
@@ -581,38 +834,44 @@ Use exactly this structure:
             total_weight += importance
 
             result = coverage_map.get(
-                req_id
+                need_id
             )
 
             if result is None:
+
                 score = 0.0
+
             else:
-                score = self.STATUS_SCORES.get(
-                    result["status"],
-                    0.0
+
+                score = (
+                    self.STATUS_SCORES.get(
+                        result["status"],
+                        0.0
+                    )
                 )
 
             weighted_score += (
                 score * importance
             )
 
-        if total_weight == 0:
+        if total_weight <= 0:
             return 0.0
 
         return (
-            weighted_score /
-            total_weight
+            weighted_score
+            / total_weight
         )
 
     # ==========================================================
-    # FORMAT REQUIREMENTS
+    # FORMAT INFORMATION NEEDS
     # ==========================================================
 
     @staticmethod
-    def _format_items(items):
+    def _format_information_needs(
+        items
+    ):
         """
-        Convert requirement/constraint dictionaries
-        into readable prompt text.
+        Format information needs for the LLM.
         """
 
         if not items:
@@ -636,31 +895,66 @@ Use exactly this structure:
                 )
             )
 
-            item_type = str(
-                item.get(
-                    "type",
-                    "other"
-                )
-            )
-
             try:
+
                 importance = float(
                     item.get(
                         "importance",
                         0.0
                     )
                 )
+
             except (
                 TypeError,
                 ValueError
             ):
+
                 importance = 0.0
 
             lines.append(
                 f"{item_id}: "
                 f"{description} "
-                f"[type={item_type}, "
-                f"importance={importance:.2f}]"
+                f"[importance="
+                f"{importance:.2f}]"
             )
 
-        return "\n".join(lines)
+        return "\n".join(
+            lines
+        )
+
+    # ==========================================================
+    # FORMAT STRINGS
+    # ==========================================================
+
+    @staticmethod
+    def _format_strings(
+        items
+    ):
+        """
+        Format planner string lists.
+        """
+
+        if not items:
+            return "None."
+
+        lines = []
+
+        for item in items:
+
+            value = str(
+                item
+            ).strip()
+
+            if not value:
+                continue
+
+            lines.append(
+                f"- {value}"
+            )
+
+        if not lines:
+            return "None."
+
+        return "\n".join(
+            lines
+        )

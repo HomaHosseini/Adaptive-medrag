@@ -1,0 +1,95 @@
+{
+    "confidence": {
+        "configuration": "confidence",
+        "accuracy": 0.0,
+        "correct": 0,
+        "total_questions": 1,
+        "avg_iterations": 1.0,
+        "total_iterations": 1,
+        "avg_queries": 2.0,
+        "total_queries": 2,
+        "avg_successful_retrievals": 2.0,
+        "total_successful_retrievals": 2,
+        "avg_failed_retrievals": 0.0,
+        "total_failed_retrievals": 0,
+        "avg_llm_calls": 7.0,
+        "total_llm_calls": 7,
+        "avg_prompt_tokens": 8380.0,
+        "total_prompt_tokens": 8380,
+        "avg_completion_tokens": 1496.0,
+        "total_completion_tokens": 1496,
+        "avg_total_tokens": 9876.0,
+        "total_tokens": 9876,
+        "avg_latency_seconds": 96.7274119000067,
+        "total_latency_seconds": 96.7274119000067,
+        "results": [
+            {
+                "id": "MedQA_1",
+                "configuration": "confidence",
+                "predicted": "A",
+                "expected": "B",
+                "correct": false,
+                "iterations": 1,
+                "confidence": 85.0,
+                "query_budget_history": [
+                    2
+                ],
+                "queries_generated": 2,
+                "successful_retrievals": 2,
+                "failed_retrievals": 0,
+                "use_planner": false,
+                "use_planner_budget": false,
+                "use_coverage": false,
+                "use_novelty": false,
+                "use_options_in_gate": true,
+                "query_budget_mode": "confidence",
+                "evidence_history": [],
+                "coverage_history": [],
+                "controller_config": {
+                    "use_planner": false,
+                    "use_planner_budget": false,
+                    "use_coverage": false,
+                    "use_novelty": false,
+                    "use_options_in_gate": true,
+                    "query_budget_mode": "confidence",
+                    "gate_features": [
+                        "confidence",
+                        "answerable",
+                        "discrimination"
+                    ],
+                    "confidence_history": [
+                        85.0
+                    ],
+                    "novelty_history": [
+                        null
+                    ],
+                    "discrimination_history": [
+                        true
+                    ],
+                    "query_budget_history": [
+                        2
+                    ],
+                    "llm_calls": 7,
+                    "prompt_tokens": 8380,
+                    "completion_tokens": 1496,
+                    "total_tokens": 9876,
+                    "latency_seconds": 96.7274119000067
+                },
+                "llm_calls": 7,
+                "prompt_tokens": 8380,
+                "completion_tokens": 1496,
+                "total_tokens": 9876,
+                "latency_seconds": 96.7274119000067,
+                "confidence_history": [
+                    85.0
+                ],
+                "novelty_history": [
+                    null
+                ],
+                "discrimination_history": [
+                    true
+                ]
+            }
+        ]
+    }
+}

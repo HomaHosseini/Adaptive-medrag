@@ -52,6 +52,11 @@ class MedRAG:
         self.db_dir = db_dir
         self.cache_dir = cache_dir
         self.docExt = None
+        self.llm_call_count = 0
+        self.llm_call_history = []
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
         if rag:
             self.retrieval_system = RetrievalSystem(self.retriever_name, self.corpus_name, self.db_dir, cache=corpus_cache, HNSW=HNSW)
         else:
@@ -170,6 +175,33 @@ class MedRAG:
 
                     response.raise_for_status()
                     data = response.json()
+                    usage = data.get("usage", {})
+                    self.llm_call_count += 1
+
+                    prompt_tokens = usage.get(
+                        "prompt_tokens",
+                        0
+                    )
+
+                    completion_tokens = usage.get(
+                        "completion_tokens",
+                        0
+                    )
+
+                    total_tokens = usage.get(
+                        "total_tokens",
+                        prompt_tokens + completion_tokens
+                    )
+
+                    self.llm_call_history.append({
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": total_tokens
+                    })
+                    self.prompt_tokens += prompt_tokens
+                    self.completion_tokens += completion_tokens
+                    self.total_tokens += total_tokens
+
                     return data["choices"][0]["message"]["content"]
 
                 except requests.exceptions.RequestException as e:
@@ -181,15 +213,100 @@ class MedRAG:
                     print(f"Network error: {e}. Retrying Arvan API in {delay} seconds...")
                     time.sleep(delay)
         elif "openai" in self.llm_name.lower():
-            ans = openai_client(
+
+            response = openai_client(
                 model=self.model,
                 messages=messages,
                 temperature=0.0,
                 **kwargs
             )
+
+            self.llm_call_count += 1
+
+            usage = response.usage
+
+            prompt_tokens = (
+                getattr(usage, "prompt_tokens", 0)
+                or 0
+            )
+
+            completion_tokens = (
+                getattr(usage, "completion_tokens", 0)
+                or 0
+            )
+
+            total_tokens = (
+                getattr(usage, "total_tokens", 0)
+                or (
+                    prompt_tokens
+                    + completion_tokens
+                )
+            )
+
+            self.prompt_tokens += prompt_tokens
+            self.completion_tokens += completion_tokens
+            self.total_tokens += total_tokens
+
+            self.llm_call_history.append({
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens
+            })
+
+            ans = response.choices[0].message.content
+            
         elif "gemini" in self.llm_name.lower():
-            response = self.model.generate_content(messages[0]["content"] + '\n\n' + messages[1]["content"], **kwargs)
-            ans = response.candidates[0].content.parts[0].text
+
+            response = self.model.generate_content(
+                messages[0]["content"]
+                + "\n\n"
+                + messages[1]["content"],
+                **kwargs
+            )
+
+            self.llm_call_count += 1
+
+            usage = getattr(
+                response,
+                "usage_metadata",
+                None
+            )
+
+            prompt_tokens = getattr(
+                usage,
+                "prompt_token_count",
+                0
+            ) if usage else 0
+
+            completion_tokens = getattr(
+                usage,
+                "candidates_token_count",
+                0
+            ) if usage else 0
+
+            total_tokens = getattr(
+                usage,
+                "total_token_count",
+                prompt_tokens + completion_tokens
+            ) if usage else (
+                prompt_tokens + completion_tokens
+            )
+
+            self.prompt_tokens += prompt_tokens
+            self.completion_tokens += completion_tokens
+            self.total_tokens += total_tokens
+
+            self.llm_call_history.append({
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens
+            })
+
+            ans = (
+                response.candidates[0]
+                .content.parts[0]
+                .text
+            )
         else:
             stopping_criteria = None
             prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -219,7 +336,40 @@ class MedRAG:
                     **kwargs
                 )
             # ans = response[0]["generated_text"]
-            ans = response[0]["generated_text"][len(prompt):]
+            generated_text = response[0]["generated_text"]
+
+            ans = generated_text[len(prompt):]
+
+            self.llm_call_count += 1
+
+            prompt_tokens = len(
+                self.tokenizer.encode(
+                    prompt,
+                    add_special_tokens=False
+                )
+            )
+
+            completion_tokens = len(
+                self.tokenizer.encode(
+                    ans,
+                    add_special_tokens=False
+                )
+            )
+
+            total_tokens = (
+                prompt_tokens
+                + completion_tokens
+            )
+
+            self.prompt_tokens += prompt_tokens
+            self.completion_tokens += completion_tokens
+            self.total_tokens += total_tokens
+
+            self.llm_call_history.append({
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens
+            })
         return ans
 
     def medrag_answer(self, question, options=None, k=32, rrf_k=100, save_dir = None, snippets=None, snippets_ids=None, **kwargs):
@@ -298,6 +448,13 @@ class MedRAG:
         return answers[0] if len(answers)==1 else answers, retrieved_snippets, scores
 
     def i_medrag_answer(self, question, options=None, k=32, rrf_k=100, save_path = None, n_rounds=4, n_queries=3, qa_cache_path=None, **kwargs):
+        self.llm_call_count = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+        self.llm_call_history = []
+
+        start_time = time.perf_counter()
         if options is not None:
             options = '\n'.join([key+". "+options[key] for key in sorted(options.keys())])
         else:
@@ -390,7 +547,21 @@ class MedRAG:
                 if save_path:
                     with open(save_path, 'w') as f:
                         json.dump([p if type(p) == dict else p.model_dump() for p in saved_messages], f, indent=4)
-                return messages[-1]["content"], messages
+                latency_seconds = (
+                    time.perf_counter()
+                    - start_time
+                )
+                return (
+                    messages[-1]["content"],
+                    messages,
+                    {
+                            "llm_calls": self.llm_call_count,
+                            "prompt_tokens": self.prompt_tokens,
+                            "completion_tokens": self.completion_tokens,
+                            "total_tokens": self.total_tokens,
+                            "latency_seconds": latency_seconds,
+                        }
+                    )
             elif "## Queries" in last_content:
                 messages = messages[:-1]
                 if last_content.split("## Queries")[-1].strip() == "":
@@ -437,7 +608,21 @@ class MedRAG:
                 messages.append(response_message)
                 print("No queries or answer. Continue with next iteration.")
                 continue
-        return messages[-1]["content"], messages
+        latency_seconds = (
+            time.perf_counter()
+            - start_time
+        )
+        return (
+            messages[-1]["content"],
+            messages,
+            {
+                "llm_calls": self.llm_call_count,
+                "prompt_tokens": self.prompt_tokens,
+                "completion_tokens": self.completion_tokens,
+                "total_tokens": self.total_tokens,
+                "latency_seconds": latency_seconds,
+            }
+        )
 
 class CustomStoppingCriteria(StoppingCriteria):
     def __init__(self, stop_words, tokenizer, input_len=0):

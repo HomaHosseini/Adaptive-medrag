@@ -1,8 +1,8 @@
 from .medrag import MedRAG
 
 import json
+import time
 import re
-import ast
 
 from .evidence_tracker import EvidenceTracker
 from .evidence_coverage import EvidenceCoverageAnalyzer
@@ -99,12 +99,90 @@ def parse_json_response(response):
         "Unable to parse JSON response."
     )
 
+# ============================================================
+# CONTROLLER UTILITIES
+# ============================================================
+
+def clamp01(value, default=0.5):
+    """
+    Safely convert a value to [0, 1].
+    """
+
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return default
+
+    return max(0.0, min(1.0, value))
+
+
+def confidence_to_01(confidence):
+    """
+    Convert confidence from 0-100 to 0-1.
+    """
+
+    try:
+        return clamp01(
+            float(confidence) / 100.0
+        )
+    except (TypeError, ValueError):
+        return 0.5
+
+
+# ============================================================
+# DETERMINISTIC QUERY-BUDGET CONTROLLER
+# ============================================================
+def choose_query_budget(
+    confidence,
+    answerable,
+    discrimination,
+    novelty=None,
+    iteration=1,
+    max_iterations=3,
+    has_options=True,
+):
+    """
+    Stage-1 confidence controller.
+
+    STOP when evidence is judged sufficient.
+    """
+
+    if iteration >= max_iterations:
+        return 0
+
+    c = confidence / 100.0
+    d = 1.0 if discrimination else 0.0
+
+    # --------------------------------------------
+    # STOP
+    # --------------------------------------------
+
+    if answerable and c >= 0.80:
+        if not has_options or d >= 0.70:
+            return 0
+
+    # --------------------------------------------
+    # CONTINUE
+    # --------------------------------------------
+
+    if not answerable:
+        return 2
+
+    if has_options and d < 0.70:
+        return 2
+
+    if c < 0.50:
+        return 4
+
+    if c < 0.70:
+        return 2
+
+    return 1
 
 def check_stopping_gate(
     medrag_instance,
     question,
     context,
-    threshold=85,
     gate_features=None,
     coverage_stats=None,
     evidence_stats=None,
@@ -112,58 +190,50 @@ def check_stopping_gate(
     use_options_in_gate=False,
 ):
     """
-    Adaptive stopping controller.
+    LLM-based SIGNAL ESTIMATOR.
 
-    The controller decides whether additional retrieval is
-    likely to materially improve the reliability of downstream
-    answering.
+    IMPORTANT:
+        This function does NOT decide STOP / CONTINUE.
 
-    Gate features:
+    The LLM only estimates:
+        - confidence
+        - answerability
+        - option discrimination
+
+    Python decides the actual retrieval budget afterward.
+
+    Active features:
         confidence
         answerable
         coverage
         novelty
         redundancy
         discrimination
-
-    IMPORTANT:
-        Answer choices can optionally be supplied.
-
-        When use_options_in_gate=True, the controller uses
-        the options ONLY to evaluate whether the retrieved
-        evidence can discriminate among candidate answers.
-
-        The controller must NOT produce the final answer.
     """
 
     if gate_features is None:
         gate_features = [
             "confidence",
-            "answerable",
+            "answerable"
         ]
 
     # --------------------------------------------------------
-    # Safety: options automatically enable discrimination
+    # Automatically enable discrimination when options exist
     # --------------------------------------------------------
 
-    if use_options_in_gate:
-
-        if "discrimination" not in gate_features:
-            gate_features = list(gate_features)
-            gate_features.append(
-                "discrimination"
-            )
+    if use_options_in_gate and "discrimination" not in gate_features:
+        gate_features = list(gate_features)
+        gate_features.append("discrimination")
 
     # --------------------------------------------------------
     # No evidence
     # --------------------------------------------------------
 
     if not context or not context.strip():
-
         return (
-            False,
-            0.0,
-            False,
+            0.0,      # confidence
+            False,    # answerable
+            False,    # discrimination
             "No retrieved evidence available."
         )
 
@@ -183,9 +253,7 @@ def check_stopping_gate(
                 f"{key}. {options[key]}"
             )
 
-        option_text = "\n".join(
-            option_lines
-        )
+        option_text = "\n".join(option_lines)
 
     # ========================================================
     # BUILD SIGNAL TEXT
@@ -224,11 +292,20 @@ def check_stopping_gate(
                 []
             ):
 
+                try:
+                    item_confidence = float(
+                        item.get("confidence", 0.0)
+                    )
+                except (
+                    TypeError,
+                    ValueError
+                ):
+                    item_confidence = 0.0
+
                 requirements.append(
                     f"- {item.get('id', '')}: "
                     f"{item.get('status', 'MISSING')} "
-                    f"(confidence="
-                    f"{float(item.get('confidence', 0.0)):.2f})"
+                    f"(confidence={item_confidence:.2f})"
                 )
 
             signal_text.append(
@@ -300,35 +377,34 @@ SEMANTIC REDUNDANCY:
 
     if "discrimination" in gate_features:
 
-        if options:
+        if use_options_in_gate and options:
 
             signal_text.append(
                 f"""
-OPTION DISCRIMINATION TARGET:
+OPTION DISCRIMINATION:
 
-The downstream QA problem is multiple-choice.
+The downstream task is multiple-choice.
 
 Candidate options:
 
 {option_text}
 
-Evaluate whether the RETRIEVED EVIDENCE itself contains
-enough information to distinguish the relevant candidate
-from the alternatives.
+Evaluate ONLY whether the retrieved evidence contains
+enough information to distinguish among the candidates.
 
-Do NOT simply use your own medical knowledge.
+Do NOT answer the question.
+Do NOT identify the correct option.
+Do NOT rely on outside medical knowledge.
 """
             )
 
         else:
 
             signal_text.append(
-                "OPTION DISCRIMINATION: unavailable because options were not supplied."
+                "OPTION DISCRIMINATION: unavailable."
             )
 
-    signal_text = "\n".join(
-        signal_text
-    )
+    signal_text = "\n".join(signal_text)
 
     # ========================================================
     # FEATURE INSTRUCTIONS
@@ -336,27 +412,21 @@ Do NOT simply use your own medical knowledge.
 
     feature_instructions = []
 
-    # --------------------------------------------------------
-    # CONFIDENCE
-    # --------------------------------------------------------
-
     if "confidence" in gate_features:
 
         feature_instructions.append(
             """
 CONFIDENCE:
 
-Estimate how strongly the RETRIEVED EVIDENCE supports a
-reliable downstream answer.
+Estimate how strongly the RETRIEVED EVIDENCE supports
+a reliable downstream answer.
 
-Do not increase confidence merely because you personally
-know the medical answer.
+This is evidence confidence, not confidence from your
+own medical knowledge.
+
+If the evidence is incomplete or indirect, lower the score.
 """
         )
-
-    # --------------------------------------------------------
-    # ANSWERABILITY
-    # --------------------------------------------------------
 
     if "answerable" in gate_features:
 
@@ -364,102 +434,81 @@ know the medical answer.
             """
 ANSWERABILITY:
 
-Determine whether the current retrieved evidence is sufficient
-for a downstream QA system to answer reliably without another
-retrieval iteration.
+Determine whether the currently retrieved evidence contains
+enough information for a downstream QA system to answer
+reliably without another retrieval iteration.
+
+Answerable means the evidence is sufficient.
+
+It does NOT mean that you personally know the answer.
 """
         )
-
-    # --------------------------------------------------------
-    # COVERAGE
-    # --------------------------------------------------------
 
     if "coverage" in gate_features:
 
         feature_instructions.append(
             """
-REQUIREMENT COVERAGE:
+COVERAGE:
 
-Use the coverage information as evidence about whether the
-required information has actually been retrieved.
+Use the supplied coverage information.
 
-A high confidence value must NOT override a missing or
-partial high-importance requirement.
-
-If an essential requirement is still missing, prefer CONTINUE.
+Missing or partial important requirements indicate that
+important evidence may still be absent.
 """
         )
-
-    # --------------------------------------------------------
-    # NOVELTY
-    # --------------------------------------------------------
 
     if "novelty" in gate_features:
 
         feature_instructions.append(
             """
-SEMANTIC NOVELTY:
+NOVELTY:
 
-Low novelty means the latest retrieval adds little information
-that is meaningfully different from what was already retrieved.
+Low novelty means the newest retrieved evidence is largely
+repeating previously retrieved information.
 
-Very low novelty can support STOP when the existing evidence
-is otherwise sufficient.
+High novelty means the newest retrieval adds substantially
+different information.
 
-High novelty means another retrieval direction may still be
-bringing useful new information.
+Do not interpret high novelty as bad evidence.
+It indicates that retrieval is still finding new material.
 """
         )
-
-    # --------------------------------------------------------
-    # REDUNDANCY
-    # --------------------------------------------------------
 
     if "redundancy" in gate_features:
 
         feature_instructions.append(
             """
-SEMANTIC REDUNDANCY:
+REDUNDANCY:
 
-High redundancy means recent retrieval is largely repeating
-existing evidence.
+High redundancy means recent retrieval overlaps strongly
+with already retrieved evidence.
 
-High redundancy can support STOP when the evidence is already
-sufficient.
-
-High redundancy alone must NOT force STOP if an important
-information gap remains.
+Low redundancy means the latest retrieval is more distinct.
 """
         )
-
-    # --------------------------------------------------------
-    # DISCRIMINATION
-    # --------------------------------------------------------
 
     if "discrimination" in gate_features:
 
         feature_instructions.append(
             """
-OPTION DISCRIMINATION:
+DISCRIMINATION:
 
-When options are supplied, do NOT answer the question.
+When candidate options are supplied, determine whether the
+retrieved evidence itself is sufficient to distinguish the
+candidates.
 
-Instead determine whether the retrieved evidence is sufficient
-to distinguish among the candidate options.
+Do NOT choose the correct option.
 
-Example:
+For example:
 
-If the evidence explicitly supports one mechanism and does
-not leave an important competing option unresolved, the evidence
-may be sufficient.
+Strong discrimination:
+The evidence explicitly supports one candidate mechanism,
+organism, diagnosis, or treatment while ruling out important
+alternatives.
 
-If the evidence supports only a general topic but does not
-distinguish the alternatives, return CONTINUE.
-
-Do NOT stop merely because one option appears familiar or
-because you know the medical answer from outside knowledge.
-
-The evidence must support the discrimination.
+Weak discrimination:
+The evidence discusses only the general topic and does not
+allow reliable separation of the candidates.
 """
         )
 
@@ -468,7 +517,7 @@ The evidence must support the discrimination.
     )
 
     # ========================================================
-    # PROMPT
+    # OPTIONS SECTION
     # ========================================================
 
     options_section = ""
@@ -482,25 +531,29 @@ ANSWER OPTIONS
 
 {option_text}
 
-IMPORTANT:
-These options are provided ONLY to evaluate whether the
-retrieved evidence sufficiently discriminates among the
-candidate answers.
+These options are provided ONLY to measure evidence
+discrimination.
 
-Do NOT output the correct option.
-Do NOT choose an answer.
-Do NOT use an option as a shortcut for external medical
-knowledge.
+Do NOT output the correct answer.
+Do NOT rank the options.
+Do NOT use an option as a substitute for missing evidence.
 """
 
+    # ========================================================
+    # PROMPT
+    # ========================================================
+
     gate_prompt = f"""
-You are a medical QA retrieval stopping controller.
+You are an evidence assessment module inside an adaptive
+medical retrieval system.
 
-Your ONLY job is to decide whether another retrieval iteration
-is likely to materially improve the evidence available to a
-downstream answerer.
+Your role is NOT to control retrieval directly.
 
-You are NOT the final answerer.
+Your role is ONLY to estimate the current state of the
+retrieved evidence.
+
+The Python controller will use your measurements to decide
+whether more retrieval is necessary.
 
 ==================================================
 QUESTION
@@ -517,7 +570,7 @@ RETRIEVED EVIDENCE
 {context}
 
 ==================================================
-ACTIVE GATE FEATURES
+ACTIVE FEATURES
 ==================================================
 
 {", ".join(gate_features)}
@@ -529,39 +582,20 @@ ADDITIONAL SIGNALS
 {signal_text}
 
 ==================================================
-RULES
+INSTRUCTIONS
 ==================================================
 
-1. Use the question and retrieved evidence.
-2. Do NOT produce the final answer.
-3. Do NOT invent evidence.
-4. Do NOT rely on external medical knowledge when the evidence
-   does not contain the necessary information.
-5. Decide whether additional retrieval would materially improve
-   downstream reliability.
-6. Be conservative about stopping.
-7. If an important information gap remains, prefer CONTINUE.
+1. Judge the RETRIEVED EVIDENCE.
+2. Use the question as context.
+3. Do NOT use outside medical knowledge to fill evidence gaps.
+4. Do NOT produce the final answer.
+5. Do NOT select an answer option.
+6. Do NOT decide the retrieval budget.
+7. Be conservative.
+8. If the evidence is indirect, incomplete, contradictory,
+   or insufficient, lower confidence.
 
 {feature_instructions}
-
-==================================================
-STOP
-==================================================
-
-STOP means:
-
-Additional retrieval is unlikely to materially improve the
-reliability of the downstream answer.
-
-==================================================
-CONTINUE
-==================================================
-
-CONTINUE means:
-
-Additional retrieval is likely to provide information that is
-still missing, ambiguous, weakly supported, or necessary for
-distinguishing competing interpretations.
 
 ==================================================
 OUTPUT
@@ -569,20 +603,28 @@ OUTPUT
 
 Return ONLY valid JSON.
 
-Use exactly:
+Exactly:
 
 {{
     "answerable": true,
-    "confidence": 90,
+    "confidence": 85,
     "discrimination_sufficient": true,
-    "stop": true,
     "reasoning": "Brief explanation."
 }}
 
-If option discrimination is not active, still return
-"discrimination_sufficient": true or false based on whether
-the field is relevant; it will only affect the final decision
-when the feature is enabled.
+CONFIDENCE:
+0 = no reliable support
+100 = very strong direct support
+
+DISCRIMINATION_SUFFICIENT:
+true = evidence can reliably distinguish the candidates
+false = evidence cannot reliably distinguish the candidates
+
+Do NOT include:
+- stop
+- query budget
+- final answer
+- option letter
 """
 
     # ========================================================
@@ -600,13 +642,22 @@ when the feature is enabled.
             ]
         )
 
+        if response is None:
+            raise ValueError(
+                "Gate returned None."
+            )
+
+        response = str(
+            response
+        ).strip()
+
         result = parse_json_response(
             response
         )
 
-        # ----------------------------------------------------
-        # answerable
-        # ----------------------------------------------------
+        # ====================================================
+        # ANSWERABILITY
+        # ====================================================
 
         answerable_value = result.get(
             "answerable",
@@ -619,9 +670,7 @@ when the feature is enabled.
         ):
 
             answerable = (
-                answerable_value
-                .strip()
-                .lower()
+                answerable_value.strip().lower()
                 == "true"
             )
 
@@ -631,9 +680,9 @@ when the feature is enabled.
                 answerable_value
             )
 
-        # ----------------------------------------------------
-        # confidence
-        # ----------------------------------------------------
+        # ====================================================
+        # CONFIDENCE
+        # ====================================================
 
         try:
 
@@ -659,9 +708,9 @@ when the feature is enabled.
             )
         )
 
-        # ----------------------------------------------------
-        # discrimination
-        # ----------------------------------------------------
+        # ====================================================
+        # DISCRIMINATION
+        # ====================================================
 
         discrimination_value = result.get(
             "discrimination_sufficient",
@@ -674,9 +723,7 @@ when the feature is enabled.
         ):
 
             discrimination_sufficient = (
-                discrimination_value
-                .strip()
-                .lower()
+                discrimination_value.strip().lower()
                 == "true"
             )
 
@@ -686,58 +733,9 @@ when the feature is enabled.
                 discrimination_value
             )
 
-        # ----------------------------------------------------
-        # model stop
-        # ----------------------------------------------------
-
-        model_stop_value = result.get(
-            "stop",
-            False
-        )
-
-        if isinstance(
-            model_stop_value,
-            str
-        ):
-
-            model_stop = (
-                model_stop_value
-                .strip()
-                .lower()
-                == "true"
-            )
-
-        else:
-
-            model_stop = bool(
-                model_stop_value
-            )
-
-        # ----------------------------------------------------
-        # Base stop decision
-        # ----------------------------------------------------
-
-        should_stop = (
-            model_stop
-            and answerable
-            and confidence >= threshold
-        )
-
-        # ----------------------------------------------------
-        # If discrimination is enabled,
-        # require discrimination too.
-        # ----------------------------------------------------
-
-        if "discrimination" in gate_features:
-
-            should_stop = (
-                should_stop
-                and discrimination_sufficient
-            )
-
-        # ----------------------------------------------------
-        # Reasoning
-        # ----------------------------------------------------
+        # ====================================================
+        # REASONING
+        # ====================================================
 
         reasoning = str(
             result.get(
@@ -770,11 +768,6 @@ when the feature is enabled.
             f"{confidence:.1f}%"
         )
 
-        print(
-            f"   [Gate Threshold]: "
-            f"{threshold}%"
-        )
-
         if "discrimination" in gate_features:
 
             print(
@@ -783,24 +776,14 @@ when the feature is enabled.
             )
 
         print(
-            f"   [Gate Model Stop]: "
-            f"{model_stop}"
-        )
-
-        print(
-            f"   [Gate Decision]: "
-            f"{'STOP' if should_stop else 'CONTINUE'}"
-        )
-
-        print(
             f"   [Gate Reasoning]: "
             f"{reasoning}"
         )
 
         return (
-            should_stop,
             confidence,
             answerable,
+            discrimination_sufficient,
             reasoning
         )
 
@@ -811,204 +794,15 @@ when the feature is enabled.
         )
 
         print(
-            "   Defaulting to CONTINUE."
+            "   Returning conservative evidence signals."
         )
 
         return (
-            False,
             0.0,
+            False,
             False,
             f"Gate error: {e}"
         )
-
-def choose_query_budget(
-    confidence,
-    answerable,
-    iteration,
-    max_iterations=3,
-    coverage_stats=None,
-    evidence_stats=None,
-    query_budget_mode="confidence",
-):
-    """
-    Determine the number of queries for the next iteration.
-
-    Modes:
-
-        confidence
-            confidence-only controller.
-
-        coverage
-            Use coverage to influence the budget.
-
-        hybrid
-            Combine confidence + coverage + novelty/redundancy.
-
-    """
-
-    # --------------------------------------------------------
-    # Stop-like condition
-    # --------------------------------------------------------
-
-    if answerable and confidence >= 85:
-
-        return 0
-
-    # --------------------------------------------------------
-    # Confidence-only
-    # --------------------------------------------------------
-
-    if query_budget_mode == "confidence":
-
-        if confidence < 60:
-            return 4
-
-        if confidence < 80:
-            return 2
-
-        return 1
-
-    # --------------------------------------------------------
-    # Coverage
-    # --------------------------------------------------------
-
-    if query_budget_mode == "coverage":
-
-        if coverage_stats is not None:
-
-            weighted = coverage_stats.get(
-                "weighted_coverage",
-                0.0
-            )
-
-            try:
-                weighted = float(
-                    weighted
-                )
-            except (
-                TypeError,
-                ValueError
-            ):
-                weighted = 0.0
-
-            if weighted < 0.40:
-                return 4
-
-            if weighted < 0.70:
-                return 2
-
-            return 1
-
-        # fallback
-        if confidence < 60:
-            return 4
-
-        if confidence < 80:
-            return 2
-
-        return 1
-
-    # --------------------------------------------------------
-    # Hybrid
-    # --------------------------------------------------------
-
-    if query_budget_mode == "hybrid":
-
-        coverage_score = 1.0
-
-        novelty = None
-        redundancy = None
-
-        if coverage_stats is not None:
-
-            try:
-
-                coverage_score = float(
-                    coverage_stats.get(
-                        "weighted_coverage",
-                        0.0
-                    )
-                )
-
-            except (
-                TypeError,
-                ValueError
-            ):
-
-                coverage_score = 0.0
-
-        if evidence_stats is not None:
-
-            novelty = evidence_stats.get(
-                "semantic_novelty"
-            )
-
-            redundancy = evidence_stats.get(
-                "semantic_redundancy"
-            )
-
-            try:
-                novelty = float(
-                    novelty
-                )
-            except (
-                TypeError,
-                ValueError
-            ):
-                novelty = None
-
-            try:
-                redundancy = float(
-                    redundancy
-                )
-            except (
-                TypeError,
-                ValueError
-            ):
-                redundancy = None
-
-        # Very incomplete evidence
-        if coverage_score < 0.40:
-
-            if novelty is None or novelty > 0.05:
-                return 4
-
-            return 2
-
-        # Partially complete evidence
-        if coverage_score < 0.70:
-
-            if (
-                novelty is not None
-                and novelty > 0.10
-            ):
-                return 3
-
-            return 2
-
-        # Nearly complete evidence
-        if coverage_score < 0.90:
-
-            if (
-                redundancy is not None
-                and redundancy > 0.90
-            ):
-                return 1
-
-            return 2
-
-        # Very high coverage
-        return 1
-
-    # --------------------------------------------------------
-    # Unknown mode
-    # --------------------------------------------------------
-
-    raise ValueError(
-        f"Unknown query_budget_mode: "
-        f"{query_budget_mode}"
-    )
-
 
 class AdaptiveMedRAG(MedRAG):
 
@@ -1076,7 +870,7 @@ class AdaptiveMedRAG(MedRAG):
         the answer options and additionally evaluates whether
         the evidence distinguishes the candidate answers.
         """
-
+        start_time = time.perf_counter()
         # ======================================================
         # DEFAULT GATE FEATURES
         # ======================================================
@@ -1159,14 +953,23 @@ class AdaptiveMedRAG(MedRAG):
         )
 
         coverage_history = []
-
         query_budget_history = []
+        confidence_history = []
+        confidence_history = []
+        novelty_history = []
+        discrimination_history = []
+        query_budget_history = []
+        gate_reasoning_history = []
 
         actual_query_count = 0
-
         successful_retrieval_count = 0
-
         failed_retrieval_count = 0
+
+        self.llm_call_count = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+        self.llm_call_history = []
 
         # ======================================================
         # PLANNER
@@ -1623,6 +1426,9 @@ class AdaptiveMedRAG(MedRAG):
                 saved_messages.append(
                     messages[-1]
                 )
+                latency_seconds = (
+                    time.perf_counter() - start_time
+                )
 
                 return (
                     messages[-1]["content"],
@@ -1651,7 +1457,25 @@ class AdaptiveMedRAG(MedRAG):
                         "query_budget_mode":
                             query_budget_mode,
                         "gate_features":
-                            gate_features
+                            gate_features,
+                    
+                        "confidence_history":
+                            confidence_history,
+
+                        "novelty_history":
+                            novelty_history,
+
+                        "discrimination_history":
+                            discrimination_history,
+
+                        "query_budget_history":
+                            query_budget_history,
+                        "llm_calls": self.llm_call_count,
+                        "prompt_tokens": self.prompt_tokens,
+                        "completion_tokens": self.completion_tokens,
+                        "total_tokens": self.total_tokens,
+                        "latency_seconds": latency_seconds,
+                                                            
                     }
                 )
 
@@ -1744,6 +1568,7 @@ class AdaptiveMedRAG(MedRAG):
                                 **kwargs
                             )
                         )
+                        
 
                         successful_retrieval_count += 1
 
@@ -1767,9 +1592,8 @@ class AdaptiveMedRAG(MedRAG):
                         failed_retrieval_count += 1
 
                         print(
-                            f"Retrieval Error: {e}"
-                        )
-
+                            f"Retrieval Error: {e}")
+                
                 # ==================================================
                 # EVIDENCE SIGNALS
                 # ==================================================
@@ -1925,77 +1749,76 @@ class AdaptiveMedRAG(MedRAG):
                 )
 
                 (
-                    stop_flag,
                     confidence,
                     answerable,
+                    discrimination_sufficient,
                     gate_reasoning
                 ) = check_stopping_gate(
                     self,
                     question,
                     context,
-                    threshold=confidence_threshold,
                     gate_features=gate_features,
                     coverage_stats=coverage_stats,
                     evidence_stats=evidence_stats,
                     options=options,
-                    use_options_in_gate=(
-                        use_options_in_gate
-                    )
+                    use_options_in_gate=use_options_in_gate
+                )
+                
+
+                confidence_history.append(confidence)
+
+                discrimination_history.append(
+                    discrimination_sufficient
                 )
 
-                # --------------------------------------------------
-                # STOP
-                # --------------------------------------------------
+                novelty_history.append(
+                    evidence_stats.get("semantic_novelty")
+                    if evidence_stats
+                    else None
+                )
 
-                if stop_flag:
+                gate_reasoning_history.append(
+                    gate_reasoning
+                )
 
-                    stopping_iteration = (
-                        i + 1
-                    )
+            query_budget = choose_query_budget(
+                confidence=confidence,
+                answerable=answerable,
+                discrimination=discrimination_sufficient,
+                novelty=(
+                    evidence_stats.get("semantic_novelty")
+                    if evidence_stats
+                    else None
+                ),
+                iteration=i + 1,
+                max_iterations=max_iterations,
+                has_options=(options is not None)
+            )
 
-                    query_budget = 0
+            stop_flag = (
+                query_budget == 0
+            )
 
-                # --------------------------------------------------
-                # CONTINUE
-                # --------------------------------------------------
+            if stop_flag:
 
-                else:
+                stopping_iteration = (
+                    i + 1
+                )
 
-                    query_budget = (
-                        choose_query_budget(
-                            confidence=confidence,
-                            answerable=answerable,
-                            iteration=i + 1,
-                            max_iterations=max_iterations,
-                            coverage_stats=(
-                                coverage_stats
-                                if use_coverage
-                                else None
-                            ),
-                            evidence_stats=(
-                                evidence_stats
-                                if use_novelty
-                                else None
-                            ),
-                            query_budget_mode=(
-                                query_budget_mode
-                            )
-                        )
-                    )
-
-                    print(
-                        f"   [Next Query Budget]: "
-                        f"{query_budget}"
-                    )
-
+            print(
+                f"   [Next Query Budget]: "
+                f"{query_budget}"
+            )
         # ======================================================
         # FINAL FAILSAFE
         # ======================================================
-
+        latency_seconds = (
+            time.perf_counter() - start_time
+        )
         return (
             messages[-1]["content"],
             saved_messages,
-            max_iterations,
+            stopping_iteration,
             confidence,
             query_budget_history,
             actual_query_count,
@@ -2019,6 +1842,25 @@ class AdaptiveMedRAG(MedRAG):
                 "query_budget_mode":
                     query_budget_mode,
                 "gate_features":
-                    gate_features
-            }
+                    gate_features,
+
+                "confidence_history":
+                    confidence_history,
+
+                "novelty_history":
+                    novelty_history,
+
+                "discrimination_history":
+                    discrimination_history,
+
+                "query_budget_history":
+                    query_budget_history,
+
+                "llm_calls": self.llm_call_count,
+                "prompt_tokens": self.prompt_tokens,
+                "completion_tokens": self.completion_tokens,
+                "total_tokens": self.total_tokens,
+                "latency_seconds": latency_seconds,
+                },
+            
         )
