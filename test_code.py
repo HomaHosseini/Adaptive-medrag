@@ -6,11 +6,20 @@ import ast
 import os
 
 from datasets import load_dataset
+from dotenv import load_dotenv
 
 from src.medrag import MedRAG
 from src.adapt_medrag import AdaptiveMedRAG
 
+# os.environ["ARVAN_API_KEY"] = "d60b8d53-5f6c-5eb6-828a-031d503221d7"
+# os.environ["ARVAN_ENDPOINT"] = "https://arvancloudai.ir/gateway/models/Llama-3.3-70B-Instruct-R1AI/wXwicG2w6RhESLlIg7KlsetpzCShAX1k0bXHGZLX9nDHLxr4mJwXDMW-2Vunju0LPAXGRBNA8Hg4NhbIgiU-6UwAscgx9QDw1vINQTl1636Buf89X2lEaj3jhmNVJ9Q5qjRgH_G-9CxWta0kJqLV_LtR3XQypA0QnGRFDXtMfKtcE4Q0w5zta-2-Ul-b1rMjyoCaLU2oe4h7NM8-23TJZsUjYp9JrcetdbTBdzh2TDjNK1Iy0I10_c_8RQIN0B9LAEWZihx5ela0-k8AEHGCTwvU5zqzRXjNpwAdEQ/v1"
+# #os.environ["ARVAN_ENDPOINT"] = "https://api.arvancloudai.ir/v1/"
 
+
+load_dotenv()
+
+api_key = os.getenv("ARVAN_API_KEY")
+endpoint = os.getenv("ARVAN_ENDPOINT")
 
 # ============================================================
 # 1. PARSE MODEL ANSWER
@@ -162,7 +171,7 @@ def load_medqa_subset(num_samples=50):
     )
 
     dataset = load_dataset(
-        "GBaker/MedQA-USMLE-4-options",
+        "TsinghuaC3I/MedXpertQA","Text",
         split="test"
     )
 
@@ -182,7 +191,7 @@ def load_medqa_subset(num_samples=50):
                 item["options"],
 
             "ground_truth":
-                item["answer_idx"]
+                item["label"]
         }
         for i, item in enumerate(subset)
     ]
@@ -747,7 +756,7 @@ def run_adaptive_benchmark(
     use_planner_budget=False,
 
     use_coverage=False,
-    use_novelty=False,
+    use_novelty=True,
 
     use_options_in_gate=True,
 
@@ -2069,7 +2078,7 @@ def print_question_outcomes(
 # 9. EXPERIMENT SETTINGS
 # ============================================================
 
-NUM_SAMPLES = 64
+NUM_SAMPLES = 10
 
 MODEL_NAME = (
     "Arvan/Llama-3-3-70B-Instruct-R1AI"
@@ -2100,7 +2109,7 @@ all_questions = load_medqa_subset(
     num_samples=NUM_SAMPLES
 )
 
-medqa_batch = all_questions[63:]
+medqa_batch = all_questions[:]
 
 print("\n")
 print("=" * 100)
@@ -2160,26 +2169,26 @@ adaptive_medrag = AdaptiveMedRAG(
 # 13. RUN STANDARD
 # ============================================================
 
-print("\n")
-print("=" * 110)
-print(
-    "RUNNING STANDARD i-MedRAG"
-)
-print("=" * 110)
+# print("\n")
+# print("=" * 110)
+# print(
+#     "RUNNING STANDARD i-MedRAG"
+# )
+# print("=" * 110)
 
-standard_result = run_standard_benchmark(
+# standard_result = run_standard_benchmark(
 
-    dataset=medqa_batch,
+#     dataset=medqa_batch,
 
-    medrag_runner=standard_medrag,
+#     medrag_runner=standard_medrag,
 
-    fixed_rounds=STANDARD_ROUNDS,
+#     fixed_rounds=STANDARD_ROUNDS,
 
-    n_queries=
-        STANDARD_QUERIES_PER_ROUND,
+#     n_queries=
+#         STANDARD_QUERIES_PER_ROUND,
 
-    k=K
-)
+#     k=K
+# )
 
 
 # ============================================================
@@ -2207,7 +2216,7 @@ adaptive_result = run_adaptive_benchmark(
 
     use_coverage=False,
 
-    use_novelty=False,
+    use_novelty=True,
 
     use_options_in_gate=True,
 
@@ -2236,73 +2245,73 @@ adaptive_result = run_adaptive_benchmark(
 # 15. QUESTION-LEVEL COMPARISON
 # ============================================================
 
-question_comparison = (
-    build_question_comparison(
+# question_comparison = (
+#     build_question_comparison(
 
-        standard_result,
+#         standard_result,
 
-        adaptive_result
-    )
-)
+#         adaptive_result
+#     )
+# )
 
 
 # ============================================================
 # 16. SUMMARY COMPARISON
 # ============================================================
 
-summary_comparison = (
-    build_summary_comparison(
+# summary_comparison = (
+#     build_summary_comparison(
 
-        standard_result,
+#         standard_result,
 
-        adaptive_result
-    )
-)
+#         adaptive_result
+#     )
+# )
 
 
 # ============================================================
 # 17. PRINT COMPARISON
 # ============================================================
 
-print_summary_comparison(
+# print_summary_comparison(
 
-    standard_result,
+#     standard_result,
 
-    adaptive_result
-)
+#     adaptive_result
+# )
 
-print_question_outcomes(
-    question_comparison
-)
+# print_question_outcomes(
+#     question_comparison
+# )
 
 
 # # ============================================================
 # # 18. EXTRA COUNTS
 # # ============================================================
 
-adaptive_improved = sum(
-    1
-    for item in question_comparison
-    if item["adaptive_improved"]
-)
+# adaptive_improved = sum(
+#     1
+#     for item in question_comparison
+#     if item["adaptive_improved"]
+# )
 
-adaptive_hurt = sum(
-    1
-    for item in question_comparison
-    if item["adaptive_hurt"]
-)
+# adaptive_hurt = sum(
+#     1
+#     for item in question_comparison
+#     if item["adaptive_hurt"]
+# )
 
-both_correct = sum(
-    1
-    for item in question_comparison
-    if item["both_correct"]
-)
+# both_correct = sum(
+#     1
+#     for item in question_comparison
+#     if item["both_correct"]
+# )
 
-both_wrong = sum(
-    1
-    for item in question_comparison
-    if item["both_wrong"]
-)
+# both_wrong = sum(
+#     1
+#     for item in question_comparison
+#     if item["both_wrong"]
+# )
 
 
 # ============================================================
@@ -2398,8 +2407,8 @@ combined_results = {
     # Full outputs
     # --------------------------------------------------------
 
-    "standard":
-        standard_result,
+    # "standard":
+    #     standard_result,
 
     "confidence_adaptive":
         adaptive_result,
@@ -2408,34 +2417,34 @@ combined_results = {
     # Aggregate comparison
     # --------------------------------------------------------
 
-    "summary_comparison":
-        summary_comparison,
+    # "summary_comparison":
+    #     summary_comparison,
+
+    # # # --------------------------------------------------------
+    # # # Question comparison
+    # # # --------------------------------------------------------
+
+    # "question_comparison":
+    #     question_comparison,
 
     # # --------------------------------------------------------
-    # # Question comparison
+    # # Outcome counts
     # # --------------------------------------------------------
 
-    "question_comparison":
-        question_comparison,
+    # "outcomes": {
 
-    # --------------------------------------------------------
-    # Outcome counts
-    # --------------------------------------------------------
+    #     "adaptive_improved":
+    #         adaptive_improved,
 
-    "outcomes": {
+    #     "adaptive_hurt":
+    #         adaptive_hurt,
 
-        "adaptive_improved":
-            adaptive_improved,
+    #     "both_correct":
+    #         both_correct,
 
-        "adaptive_hurt":
-            adaptive_hurt,
-
-        "both_correct":
-            both_correct,
-
-        "both_wrong":
-            both_wrong
-    }
+    #     "both_wrong":
+    #         both_wrong
+    # }
 }
 
 
@@ -2444,7 +2453,7 @@ combined_results = {
 # ============================================================
 
 OUTPUT_FILE = (
-    "stage1_standard_vs_confidence_50_70q.json"
+    "stage1_standard_vs_confidence_20q_novelty.json"
 )
 
 with open(
@@ -2470,10 +2479,10 @@ print("=" * 110)
 print("FINAL STAGE 1 RESULT")
 print("=" * 110)
 
-print(
-    f"Standard accuracy: "
-    f"{standard_result['accuracy']:.2f}%"
-)
+# print(
+#     f"Standard accuracy: "
+#     f"{standard_result['accuracy']:.2f}%"
+# )
 
 print(
     f"Adaptive accuracy: "
@@ -2482,10 +2491,10 @@ print(
 
 print()
 
-print(
-    f"Standard avg queries: "
-    f"{standard_result['avg_queries']:.2f}"
-)
+# print(
+#     f"Standard avg queries: "
+#     f"{standard_result['avg_queries']:.2f}"
+# )
 
 print(
     f"Adaptive avg queries: "
@@ -2494,10 +2503,10 @@ print(
 
 print()
 
-print(
-    f"Standard avg LLM calls: "
-    f"{standard_result['avg_llm_calls']:.2f}"
-)
+# print(
+#     f"Standard avg LLM calls: "
+#     f"{standard_result['avg_llm_calls']:.2f}"
+# )
 
 print(
     f"Adaptive avg LLM calls: "
@@ -2506,10 +2515,10 @@ print(
 
 print()
 
-print(
-    f"Standard avg total tokens: "
-    f"{standard_result['avg_total_tokens']:.2f}"
-)
+# print(
+#     f"Standard avg total tokens: "
+#     f"{standard_result['avg_total_tokens']:.2f}"
+# )
 
 print(
     f"Adaptive avg total tokens: "
@@ -2518,10 +2527,10 @@ print(
 
 print()
 
-print(
-    f"Standard avg latency: "
-    f"{standard_result['avg_latency_seconds']:.2f}s"
-)
+# print(
+#     f"Standard avg latency: "
+#     f"{standard_result['avg_latency_seconds']:.2f}s"
+# )
 
 print(
     f"Adaptive avg latency: "
@@ -2530,25 +2539,25 @@ print(
 
 print()
 
-print(
-    f"Adaptive improved: "
-    f"{adaptive_improved}"
-)
+# print(
+#     f"Adaptive improved: "
+#     f"{adaptive_improved}"
+# )
 
-print(
-    f"Adaptive hurt: "
-    f"{adaptive_hurt}"
-)
+# print(
+#     f"Adaptive hurt: "
+#     f"{adaptive_hurt}"
+# )
 
-print(
-    f"Both correct: "
-    f"{both_correct}"
-)
+# print(
+#     f"Both correct: "
+#     f"{both_correct}"
+# )
 
-print(
-    f"Both wrong: "
-    f"{both_wrong}"
-)
+# print(
+#     f"Both wrong: "
+#     f"{both_wrong}"
+# )
 
 print()
 

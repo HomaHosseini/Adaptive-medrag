@@ -1,0 +1,104 @@
+{
+    "experiment": {
+        "stage": "Stage 1",
+        "purpose": "Compare standard i-MedRAG against confidence-based adaptive i-MedRAG",
+        "dataset": "GBaker/MedQA-USMLE-4-options",
+        "split": "test",
+        "num_questions": 1,
+        "model": "Arvan/Llama-3-3-70B-Instruct-R1AI",
+        "retriever": "MedCPT",
+        "corpus": "Textbooks",
+        "k": 10,
+        "standard": {
+            "rounds": 3,
+            "queries_per_round": 2,
+            "queries_per_question": 6
+        },
+        "adaptive": {
+            "max_iterations": 3,
+            "initial_queries": 2,
+            "confidence_threshold": 85,
+            "use_planner": false,
+            "use_coverage": false,
+            "use_novelty": false,
+            "options_in_gate": true,
+            "gate_features": [
+                "confidence",
+                "answerable",
+                "discrimination"
+            ]
+        }
+    },
+    "confidence_adaptive": {
+        "configuration": "confidence",
+        "accuracy": 0.0,
+        "correct": 0,
+        "total_questions": 1,
+        "avg_iterations": 0.0,
+        "total_iterations": 0,
+        "avg_queries": 0.0,
+        "total_queries": 0,
+        "avg_successful_retrievals": 0.0,
+        "total_successful_retrievals": 0,
+        "avg_failed_retrievals": 0.0,
+        "total_failed_retrievals": 0,
+        "avg_llm_calls": 0.0,
+        "total_llm_calls": 0,
+        "avg_prompt_tokens": 0.0,
+        "total_prompt_tokens": 0,
+        "avg_completion_tokens": 0.0,
+        "total_completion_tokens": 0,
+        "avg_total_tokens": 0.0,
+        "total_tokens": 0,
+        "avg_latency_seconds": 13.654367899987847,
+        "total_latency_seconds": 13.654367899987847,
+        "results": [
+            {
+                "id": "MedQA_1",
+                "configuration": "confidence",
+                "question": "A junior orthopaedic surgery resident is completing a carpal tunnel repair with the department chairman as the attending physician. During the case, the resident inadvertently cuts a flexor tendon. The tendon is repaired without complication. The attending tells the resident that the patient will do fine, and there is no need to report this minor complication that will not harm the patient, as he does not want to make the patient worry unnecessarily. He tells the resident to leave this complication out of the operative report. Which of the following is the correct next action for the resident to take?",
+                "options": {
+                    "A": "Disclose the error to the patient and put it in the operative report",
+                    "B": "Tell the attending that he cannot fail to disclose this mistake",
+                    "C": "Report the physician to the ethics committee",
+                    "D": "Refuse to dictate the operative report"
+                },
+                "expected": "B",
+                "predicted": "ERROR",
+                "correct": false,
+                "raw_answer": null,
+                "error": "405 Client Error: Method Not Allowed for url: https://api.arvancloudai.ir/v1/chat/completions",
+                "iterations": 0,
+                "confidence": 0.0,
+                "confidence_history": [],
+                "novelty_history": [],
+                "discrimination_history": [],
+                "gate_reasoning_history": [],
+                "query_budget_history": [],
+                "queries_generated": 0,
+                "successful_retrievals": 0,
+                "failed_retrievals": 0,
+                "use_planner": false,
+                "use_planner_budget": false,
+                "use_coverage": false,
+                "use_novelty": true,
+                "use_options_in_gate": true,
+                "gate_features": [
+                    "confidence",
+                    "answerable",
+                    "discrimination"
+                ],
+                "query_budget_mode": "confidence",
+                "evidence_history": [],
+                "coverage_history": [],
+                "controller_config": {},
+                "llm_calls": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "latency_seconds": 13.654367899987847,
+                "history": []
+            }
+        ]
+    }
+}

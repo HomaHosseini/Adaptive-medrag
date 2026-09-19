@@ -1,0 +1,22 @@
+{
+  "model_name": "ncbi/MedCPT-Query-Encoder",
+  "encoder_variant": "query",
+  "state_encoding": "hierarchical",
+  "evidence_pooling": "mean",
+  "pooling": "cls",
+  "head_hidden_size": 256,
+  "dropout": 0.2,
+  "max_length": 512,
+  "freeze_encoder": true,
+  "lambda_start": 1.0,
+  "lambda_end": 0.1,
+  "gamma": 1.0,
+  "s0_included": true,
+  "uses_confidence": false,
+  "uses_answerability": false,
+  "uses_discrimination": false,
+  "uses_llm_judge": false,
+  "margin_threshold": -0.2,
+  "best_epoch": 1,
+  "seed": 42
+}

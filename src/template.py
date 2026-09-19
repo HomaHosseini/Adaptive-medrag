@@ -94,4 +94,15 @@ simple_medrag_prompt = Template('''Here are the relevant documents:\n{{context}}
 i_medrag_system = '''You are a helpful medical assistant, and your task is to answer the given question following the instructions given by the user. '''
 
 follow_up_instruction_ask = '''Please first analyze all the information in a section named Analysis (## Analysis). Then, use key terms from previous answers to form specific and direct questions. Generate {} concise, context-specific queries to search for additional information in an external knowledge base, in a section named Queries (## Queries). Each query should be simple and focused, directly relating to the key terms used in the answers. Wait for responses from the user before proceeding.'''
-follow_up_instruction_answer = '''Please first think step-by-step to analyze all the information in a section named Analysis (## Analysis). Then, please provide your answer choice in a section named Answer (## Answer).'''
+follow_up_instruction_answer = '''Please carefully analyze the question, answer choices, and provided evidence step-by-step in a section named Analysis (## Analysis).
+
+After completing your reasoning, provide your final answer in a section named Answer (## Answer).
+
+The Answer section must begin with exactly one line in this format:
+
+Answer: X
+
+where X is exactly one of A, B, C, or D.
+
+Do not provide any additional answer choice after this line.
+'''

@@ -3,7 +3,7 @@ import re
 import json
 import tqdm
 import torch
-import time
+import time, math
 import argparse
 import requests
 import transformers
@@ -371,6 +371,71 @@ class MedRAG:
                 "total_tokens": total_tokens
             })
         return ans
+    import math
+
+    def generate_answer_with_letter_probs(self, messages, option_letters, max_tokens=6):
+        """
+        Single deterministic call that returns a continuous 0-1 probability
+        for each MCQ option letter, extracted from token-level logprobs,
+        instead of running N sampled trials and voting.
+
+        `messages` should instruct the model to answer with ONLY the letter
+        (e.g. end the prompt with something like:
+        "Respond with only the single letter of the correct answer, nothing else.")
+        so the answer letter appears as (or very near) the first generated token.
+
+        `option_letters` is the list of valid letters for this question,
+        e.g. ["A", "B", "C", "D"] or ["A", ..., "J"] for MedXpertQA.
+
+        Returns: (raw_text, {letter: probability, ...})
+        """
+        response = openai_client(
+            model=self.model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=0.0,
+            logprobs=True,
+            top_logprobs=20,  # OpenAI's max; option letters should appear well within this
+        )
+
+        self.llm_call_count += 1
+        usage = response.usage
+        prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+        completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+        total_tokens = getattr(usage, "total_tokens", 0) or (prompt_tokens + completion_tokens)
+        self.prompt_tokens += prompt_tokens
+        self.completion_tokens += completion_tokens
+        self.total_tokens += total_tokens
+        self.llm_call_history.append({
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        })
+
+        choice = response.choices[0]
+        raw_text = choice.message.content
+
+        letter_probs = {letter: 0.0 for letter in option_letters}
+        token_entries = choice.logprobs.content if choice.logprobs else []
+
+        # Scan generated tokens for the first one whose top-k candidates include
+        # at least one valid option letter -- that's the "answer" token position.
+        for tok in token_entries:
+            candidates = {c.token.strip().upper(): c.logprob for c in tok.top_logprobs}
+            matched = {L: candidates[L] for L in option_letters if L in candidates}
+            if matched:
+                # Softmax restricted to just the option letters seen at this
+                # position, so probabilities are comparable across options
+                # even though other (irrelevant) tokens also had mass.
+                exps = {L: math.exp(lp) for L, lp in matched.items()}
+                total = sum(exps.values())
+                letter_probs = {
+                    L: (exps.get(L, 0.0) / total if total > 0 else 0.0)
+                    for L in option_letters
+                }
+                break
+
+        return raw_text, letter_probs
 
     def medrag_answer(self, question, options=None, k=32, rrf_k=100, save_dir = None, snippets=None, snippets_ids=None, **kwargs):
         '''

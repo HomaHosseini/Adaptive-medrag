@@ -1,39 +1,35 @@
-import os
-import requests
-os.environ["ARVAN_API_KEY"] = "d60b8d53-5f6c-5eb6-828a-031d503221d7"
-os.environ["ARVAN_ENDPOINT"] = "https://arvancloudai.ir/gateway/models/Llama-3.3-70B-Instruct-R1AI/wXwicG2w6RhESLlIg7KlsetpzCShAX1k0bXHGZLX9nDHLxr4mJwXDMW-2Vunju0LPAXGRBNA8Hg4NhbIgiU-6UwAscgx9QDw1vINQTl1636Buf89X2lEaj3jhmNVJ9Q5qjRgH_G-9CxWta0kJqLV_LtR3XQypA0QnGRFDXtMfKtcE4Q0w5zta-2-Ul-b1rMjyoCaLU2oe4h7NM8-23TJZsUjYp9JrcetdbTBdzh2TDjNK1Iy0I10_c_8RQIN0B9LAEWZihx5ela0-k8AEHGCTwvU5zqzRXjNpwAdEQ/v1"
-api_key = os.environ["ARVAN_API_KEY"]
-endpoint = os.environ["ARVAN_ENDPOINT"]
+import os, requests, json
+from dotenv import load_dotenv
+load_dotenv()
+ENDPOINT = os.environ["ARVAN_ENDPOINT"]
+API_KEY = os.environ["ARVAN_API_KEY"]
 
-print("Testing:", endpoint)
+# Replace with whatever exact model string Arvan uses for gpt-4o-mini in
+# your dashboard -- likely something like "gpt-4o-mini" or a longer suffixed
+# name, mirroring how your Llama model is "Llama-3.3-70B-Instruct-R1AI".
+MODEL = "gpt-4o-mini"
 
-try:
-    response = requests.post(
-        f"{endpoint}/chat/completions",
-        headers={
-            "Authorization": f"apikey {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": "Llama-3-3-70B-Instruct-R1AI",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": "Say hello in one sentence."
-                }
-            ],
-            "max_tokens": 50,
-            "temperature": 0.0
-        },
-        timeout=(10, 60)
-    )
+resp = requests.post(
+    f"{ENDPOINT}/chat/completions",
+    headers={"Authorization": f"apikey {API_KEY}", "Content-Type": "application/json"},
+    json={
+        "model": MODEL,
+        "messages": [{"role": "user", "content": "Reply with only the letter B."}],
+        "max_tokens": 5,
+        "temperature": 0.0,
+        "logprobs": True,
+        "top_logprobs": 5,
+    },
+    timeout=(30, 60),
+)
 
-    print("Status:", response.status_code)
-    print(response.text)
+print("HTTP status:", resp.status_code)
+data = resp.json()
+print(json.dumps(data, indent=2)[:3000])
 
-except requests.exceptions.ConnectTimeout:
-    print("Could not connect to the endpoint.")
-except requests.exceptions.ConnectionError as e:
-    print("Connection error:", e)
-except Exception as e:
-    print(type(e).__name__, e)
+choice = data.get("choices", [{}])[0]
+has_logprobs = choice.get("logprobs") is not None
+print("\n--- RESULT ---")
+print("logprobs field present and non-null:", has_logprobs)
+if has_logprobs:
+    print("content entries:", len(choice["logprobs"].get("content", [])))

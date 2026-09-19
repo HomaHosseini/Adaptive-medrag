@@ -29,26 +29,31 @@ class EvidenceTracker:
 
 
     def document_novelty(self, current_ids):
-        """
-        Fraction of current unique documents that were not
-        retrieved in previous iterations.
 
-        Returns:
-            None on iteration 1
-            float in [0, 1] afterwards
-        """
-
-        current_ids = set(current_ids)
+        current_ids = set(
+            str(x)
+            for x in current_ids
+            if x is not None
+        )
 
         if not current_ids:
-            return 0.0
+            return 0.0, 0
 
+        # First iteration
         if not self.previous_document_ids:
-            return None
+            return 1.0, len(current_ids)
 
-        new_documents = (current_ids - self.previous_document_ids)
+        new_ids = (
+            current_ids
+            - self.previous_document_ids
+        )
 
-        return len(new_documents) / len(current_ids)
+        novelty = (
+            len(new_ids)
+            / len(current_ids)
+        )
+
+        return novelty, len(new_ids)
 
 
 
@@ -176,27 +181,34 @@ class EvidenceTracker:
         """
         Process one retrieval iteration.
 
-        This is the main function AdaptiveMedRAG calls.
-
         Returns a dictionary containing all evidence statistics.
         """
 
-        # Deduplicate documents within this iteration
+        # ========================================================
+        # 1. CLEAN / DEDUPLICATE IDS
+        # ========================================================
+
         current_ids = list(
-            dict.fromkeys(current_ids)
+            dict.fromkeys(
+                str(x)
+                for x in current_ids
+                if x is not None
+            )
         )
 
-        # -------------------------------
-        # Document novelty
-        # -------------------------------
+        # ========================================================
+        # 2. DOCUMENT NOVELTY
+        # ========================================================
 
-        doc_novelty = self.document_novelty(
-            current_ids
+        document_novelty, num_new_documents = (
+            self.document_novelty(
+                current_ids
+            )
         )
 
-        # -------------------------------
-        # MedCPT embeddings
-        # -------------------------------
+        # ========================================================
+        # 3. MEDCPT EMBEDDINGS
+        # ========================================================
 
         current_embeddings, found_ids = (
             self.get_embeddings(
@@ -204,9 +216,9 @@ class EvidenceTracker:
             )
         )
 
-        # -------------------------------
-        # Semantic novelty
-        # -------------------------------
+        # ========================================================
+        # 4. SEMANTIC NOVELTY
+        # ========================================================
 
         semantic_stats = (
             self.semantic_novelty(
@@ -214,23 +226,19 @@ class EvidenceTracker:
             )
         )
 
-        # -------------------------------
-        # Save result
-        # -------------------------------
+        # ========================================================
+        # 5. SAVE RESULT
+        # ========================================================
 
         result = {
-            "num_documents": len(current_ids),
+            "num_documents":
+                len(current_ids),
 
-            "num_new_documents": (
-                None
-                if doc_novelty is None
-                else int(
-                    doc_novelty
-                    * len(current_ids)
-                )
-            ),
+            "num_new_documents":
+                num_new_documents,
 
-            "document_novelty": doc_novelty,
+            "document_novelty":
+                document_novelty,
 
             "semantic_novelty": (
                 None
@@ -268,35 +276,46 @@ class EvidenceTracker:
                 ]
             ),
 
-            "found_embeddings": len(
-                found_ids
-            )
+            "found_embeddings":
+                len(found_ids),
+
+            "novelty_available":
+                semantic_stats is not None
         }
 
-        # -------------------------------
-        # Save history
-        # -------------------------------
+        # ========================================================
+        # 6. SAVE HISTORY
+        # ========================================================
 
-        self.history.append(result)
+        self.history.append(
+            result
+        )
 
-        # -------------------------------
-        # Update cumulative evidence
-        # -------------------------------
+        # ========================================================
+        # 7. UPDATE CUMULATIVE DOCUMENT IDS
+        # ========================================================
 
         self.previous_document_ids.update(
             current_ids
         )
 
+        # ========================================================
+        # 8. UPDATE CUMULATIVE EMBEDDINGS
+        # ========================================================
+
         if current_embeddings is not None:
 
-            if self.previous_embeddings is None:
+            current_embeddings = np.asarray(
+                current_embeddings,
+                dtype=np.float32
+            )
 
+            if self.previous_embeddings is None:
                 self.previous_embeddings = (
                     current_embeddings
                 )
 
             else:
-
                 self.previous_embeddings = (
                     np.vstack([
                         self.previous_embeddings,
@@ -305,3 +324,13 @@ class EvidenceTracker:
                 )
 
         return result
+
+        
+    def reset(self):
+        """
+        Reset tracker state for a new question / trajectory.
+        """
+
+        self.previous_document_ids = set()
+        self.previous_embeddings = None
+        self.history = []
