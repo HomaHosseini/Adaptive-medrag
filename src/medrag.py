@@ -22,13 +22,21 @@ from config import config
 openai.api_type = openai.api_type or os.getenv("OPENAI_API_TYPE") or config.get("api_type")
 openai.api_version = openai.api_version or os.getenv("OPENAI_API_VERSION") or config.get("api_version")
 openai.api_key = openai.api_key or os.getenv('OPENAI_API_KEY') or config["api_key"]
+# NEW: custom base_url support, needed for OpenAI-SDK-compatible gateways
+# like Liara (base_url points at their endpoint instead of OpenAI's own).
+# Leave OPENAI_BASE_URL unset to keep hitting OpenAI's default endpoint.
+_openai_base_url = os.getenv("OPENAI_BASE_URL") or config.get("base_url")
 
 if openai.__version__.startswith("0"):
     openai.api_base = openai.api_base or os.getenv("OPENAI_API_BASE") or config.get("api_base")
     if openai.api_type == "azure":
         openai_client = lambda **x: openai.ChatCompletion.create(**{'engine' if k == 'model' else k: v for k, v in x.items()})["choices"][0]["message"]["content"]
+        # Raw variant: returns the full response object (not just the content
+        # string) so callers can also read .usage and .choices[0].logprobs.
+        openai_raw_client = lambda **x: openai.ChatCompletion.create(**{'engine' if k == 'model' else k: v for k, v in x.items()})
     else:
         openai_client = lambda **x: openai.ChatCompletion.create(**x)["choices"][0]["message"]["content"]
+        openai_raw_client = lambda **x: openai.ChatCompletion.create(**x)
 else:
     if openai.api_type == "azure":
         openai.azure_endpoint = openai.azure_endpoint or os.getenv("OPENAI_ENDPOINT") or config.get("azure_endpoint")
@@ -37,10 +45,20 @@ else:
             azure_endpoint=openai.azure_endpoint,
             api_key=openai.api_key,
         ).chat.completions.create(**x).choices[0].message.content
+        openai_raw_client = lambda **x: openai.AzureOpenAI(
+            api_version=openai.api_version,
+            azure_endpoint=openai.azure_endpoint,
+            api_key=openai.api_key,
+        ).chat.completions.create(**x)
     else:
         openai_client = lambda **x: openai.OpenAI(
             api_key=openai.api_key,
+            base_url=_openai_base_url,  # NEW: None = OpenAI's default endpoint; set = Liara/other gateway
         ).chat.completions.create(**x).choices[0].message.content
+        openai_raw_client = lambda **x: openai.OpenAI(
+            api_key=openai.api_key,
+            base_url=_openai_base_url,  # NEW
+        ).chat.completions.create(**x)
 
 class MedRAG:
 
@@ -72,7 +90,12 @@ class MedRAG:
             self.context_length = 30000
             self.tokenizer = tiktoken.get_encoding("cl100k_base")
         elif self.llm_name.split('/')[0].lower() == "openai":
-            self.model = self.llm_name.split('/')[-1]
+            # Was: self.llm_name.split('/')[-1] -- only kept the LAST path
+            # segment, silently dropping vendor prefixes like "meta-llama/"
+            # in multi-segment model IDs (needed for gateways such as Liara/
+            # Chabokan, e.g. "OpenAI/meta-llama/llama-3.1-8b-instruct").
+            # Matches the Arvan branch's (correct) handling above.
+            self.model = '/'.join(self.llm_name.split('/')[1:])
             if "gpt-3.5" in self.model or "gpt-35" in self.model:
                 self.max_length = 16384
                 self.context_length = 15000
@@ -313,26 +336,39 @@ class MedRAG:
             if "meditron" in self.llm_name.lower():
                 # stopping_criteria = custom_stop(["###", "User:", "\n\n\n"], self.tokenizer, input_len=len(self.tokenizer.encode(prompt_cot, add_special_tokens=True)))
                 stopping_criteria = self.custom_stop(["###", "User:", "\n\n\n"], input_len=len(self.tokenizer.encode(prompt, add_special_tokens=True)))
+
+            # Same bug as the OpenAI/Arvan branches had: do_sample was
+            # hardcoded to False, so a passed-in temperature was silently
+            # ignored (greedy decoding regardless). Derive do_sample from
+            # whether a real temperature was requested, and only pass
+            # temperature through when actually sampling -- HF's generate()
+            # warns/ignores it otherwise anyway.
+            gen_temperature = kwargs.pop("temperature", 0.0)
+            do_sample = gen_temperature is not None and gen_temperature > 0.0
+            sampling_kwargs = {"do_sample": do_sample}
+            if do_sample:
+                sampling_kwargs["temperature"] = gen_temperature
+
             if "llama-3" in self.llm_name.lower():
                 response = self.model(
                     prompt,
-                    do_sample=False,
                     eos_token_id=[self.tokenizer.eos_token_id, self.tokenizer.convert_tokens_to_ids("<|eot_id|>")],
                     pad_token_id=self.tokenizer.eos_token_id,
                     max_length=self.max_length,
                     truncation=True,
                     stopping_criteria=stopping_criteria,
+                    **sampling_kwargs,
                     **kwargs
                 )
             else:
                 response = self.model(
                     prompt,
-                    do_sample=False,
                     eos_token_id=self.tokenizer.eos_token_id,
                     pad_token_id=self.tokenizer.eos_token_id,
                     max_length=self.max_length,
                     truncation=True,
                     stopping_criteria=stopping_criteria,
+                    **sampling_kwargs,
                     **kwargs
                 )
             # ans = response[0]["generated_text"]
@@ -371,7 +407,6 @@ class MedRAG:
                 "total_tokens": total_tokens
             })
         return ans
-    import math
 
     def generate_answer_with_letter_probs(self, messages, option_letters, max_tokens=6):
         """
@@ -379,54 +414,115 @@ class MedRAG:
         for each MCQ option letter, extracted from token-level logprobs,
         instead of running N sampled trials and voting.
 
-        `messages` should instruct the model to answer with ONLY the letter
-        (e.g. end the prompt with something like:
-        "Respond with only the single letter of the correct answer, nothing else.")
-        so the answer letter appears as (or very near) the first generated token.
+        Supports both a direct OpenAI-backed runner (llm_name="OpenAI/...")
+        and an Arvan-gateway-routed one (llm_name="Arvan/...", e.g.
+        "Arvan/gpt-4o-mini") -- IMPORTANT: whether Arvan's gateway actually
+        forwards/returns logprobs is NOT guaranteed and must be verified
+        with a raw test call before relying on this (see
+        test_arvan_logprobs.py). If Arvan doesn't support it, don't use this
+        method -- use the temperature-fix fallback in evaluate_stop_reward's
+        n_trials mode instead.
 
-        `option_letters` is the list of valid letters for this question,
-        e.g. ["A", "B", "C", "D"] or ["A", ..., "J"] for MedXpertQA.
+        `messages` should instruct the model to answer with ONLY the letter
+        so the answer letter appears as (or very near) the first generated
+        token. `option_letters` is the list of valid letters for this
+        question, e.g. ["A", "B", "C", "D"].
 
         Returns: (raw_text, {letter: probability, ...})
         """
-        response = openai_client(
-            model=self.model,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=0.0,
-            logprobs=True,
-            top_logprobs=20,  # OpenAI's max; option letters should appear well within this
-        )
+        is_arvan = "arvan" in self.llm_name.lower()
+        is_openai = "openai" in self.llm_name.lower()
 
-        self.llm_call_count += 1
-        usage = response.usage
-        prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-        completion_tokens = getattr(usage, "completion_tokens", 0) or 0
-        total_tokens = getattr(usage, "total_tokens", 0) or (prompt_tokens + completion_tokens)
-        self.prompt_tokens += prompt_tokens
-        self.completion_tokens += completion_tokens
-        self.total_tokens += total_tokens
-        self.llm_call_history.append({
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": total_tokens,
-        })
+        if not (is_arvan or is_openai):
+            raise ValueError(
+                f"generate_answer_with_letter_probs requires an OpenAI- or "
+                f"Arvan-backed MedRAG instance, got '{self.llm_name}'."
+            )
 
-        choice = response.choices[0]
-        raw_text = choice.message.content
+        if is_arvan:
+            resp = requests.post(
+                f"{self.api_endpoint}/chat/completions",
+                headers={
+                    "Authorization": f"apikey {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                    "temperature": 0.0,
+                    "logprobs": True,
+                    "top_logprobs": 20,
+                },
+                timeout=(60, 180),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            self.llm_call_count += 1
+            usage = data.get("usage", {})
+            prompt_tokens = usage.get("prompt_tokens", 0)
+            completion_tokens = usage.get("completion_tokens", 0)
+            total_tokens = usage.get("total_tokens", prompt_tokens + completion_tokens)
+            self.prompt_tokens += prompt_tokens
+            self.completion_tokens += completion_tokens
+            self.total_tokens += total_tokens
+            self.llm_call_history.append({
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+            })
+
+            choice = data["choices"][0]
+            raw_text = choice["message"]["content"]
+            logprobs_obj = choice.get("logprobs")
+            # dict-style entries: [{"token": ..., "top_logprobs": [{"token": ..., "logprob": ...}, ...]}, ...]
+            token_entries = (logprobs_obj or {}).get("content", []) or []
+
+            def token_of(e): return e["token"]
+            def top_list_of(e): return e.get("top_logprobs", [])
+            def cand_token(c): return c["token"]
+            def cand_logprob(c): return c["logprob"]
+
+        else:  # is_openai
+            response = openai_raw_client(
+                model=self.model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=0.0,
+                logprobs=True,
+                top_logprobs=20,
+            )
+
+            self.llm_call_count += 1
+            usage = response.usage
+            prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+            completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+            total_tokens = getattr(usage, "total_tokens", 0) or (prompt_tokens + completion_tokens)
+            self.prompt_tokens += prompt_tokens
+            self.completion_tokens += completion_tokens
+            self.total_tokens += total_tokens
+            self.llm_call_history.append({
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+            })
+
+            choice = response.choices[0]
+            raw_text = choice.message.content
+            token_entries = choice.logprobs.content if choice.logprobs else []
+
+            def token_of(e): return e.token
+            def top_list_of(e): return e.top_logprobs
+            def cand_token(c): return c.token
+            def cand_logprob(c): return c.logprob
 
         letter_probs = {letter: 0.0 for letter in option_letters}
-        token_entries = choice.logprobs.content if choice.logprobs else []
 
-        # Scan generated tokens for the first one whose top-k candidates include
-        # at least one valid option letter -- that's the "answer" token position.
         for tok in token_entries:
-            candidates = {c.token.strip().upper(): c.logprob for c in tok.top_logprobs}
+            candidates = {cand_token(c).strip().upper(): cand_logprob(c) for c in top_list_of(tok)}
             matched = {L: candidates[L] for L in option_letters if L in candidates}
             if matched:
-                # Softmax restricted to just the option letters seen at this
-                # position, so probabilities are comparable across options
-                # even though other (irrelevant) tokens also had mass.
                 exps = {L: math.exp(lp) for L, lp in matched.items()}
                 total = sum(exps.values())
                 letter_probs = {
@@ -435,7 +531,107 @@ class MedRAG:
                 }
                 break
 
+        if all(p == 0.0 for p in letter_probs.values()) and raw_text:
+            print(f"WARNING: none of {option_letters} found in top_logprobs for "
+                  f"response {raw_text!r} -- check that the prompt forces a bare-letter "
+                  f"answer, or that this gateway actually returns logprobs at all.")
+
         return raw_text, letter_probs
+
+    def generate_answer_with_letter_probs_local(self, messages, option_letters, max_new_tokens=512, temperature=0.0):
+        """
+        For LOCALLY-hosted HF models only (e.g. Llama-3.1-8B-Instruct).
+
+        Unlike generate_answer_with_letter_probs (which requires forcing a
+        bare-letter completion to get clean logprobs, at a real accuracy
+        cost), this runs ONE normal generation call -- full reasoning
+        allowed, same prompt/template as your existing n_trials answer
+        generation -- and extracts a continuous per-letter probability from
+        the model's own logits at the token position where it actually
+        commits to its final answer (e.g. "...Answer: D"), not the first
+        token. No accuracy trade-off: the model reasons exactly as it
+        normally would.
+
+        Returns: (raw_text, {letter: probability, ...})
+        """
+        underlying_model = getattr(self.model, "model", self.model)
+        tokenizer = getattr(self.model, "tokenizer", None) or self.tokenizer
+
+        prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = tokenizer(
+            prompt, return_tensors="pt", truncation=True, max_length=self.max_length
+        ).to(underlying_model.device)
+
+        gen_kwargs = dict(
+            max_new_tokens=max_new_tokens,
+            do_sample=temperature > 0.0,
+            pad_token_id=tokenizer.eos_token_id,
+            output_scores=True,
+            return_dict_in_generate=True,
+        )
+        if temperature > 0.0:
+            gen_kwargs["temperature"] = temperature
+
+        with torch.no_grad():
+            out = underlying_model.generate(**inputs, **gen_kwargs)
+
+        generated_ids = out.sequences[0][inputs["input_ids"].shape[1]:]
+        raw_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
+
+        self.llm_call_count += 1
+        prompt_tokens = inputs["input_ids"].shape[1]
+        completion_tokens = generated_ids.shape[0]
+        self.prompt_tokens += prompt_tokens
+        self.completion_tokens += completion_tokens
+        self.total_tokens += prompt_tokens + completion_tokens
+        self.llm_call_history.append({
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        })
+
+        # Pre-compute the token id(s) each option letter maps to, accounting
+        # for a leading-space variant (common with BPE tokenizers -- "B" and
+        # " B" are usually different token ids).
+        letter_token_ids = {}
+        for letter in option_letters:
+            for variant in (letter, f" {letter}"):
+                ids = tokenizer.encode(variant, add_special_tokens=False)
+                if len(ids) == 1:
+                    letter_token_ids.setdefault(letter, set()).add(ids[0])
+
+        best_step_mass = -1.0
+        best_step_probs = {letter: 0.0 for letter in option_letters}
+
+        for step_logits in out.scores:
+            probs = torch.softmax(step_logits[0].float(), dim=-1)
+            step_letter_mass = {
+                letter: sum(probs[i].item() for i in ids)
+                for letter, ids in letter_token_ids.items()
+            }
+            total = sum(step_letter_mass.values())
+
+            # A step where option letters dominate the distribution (>50%
+            # combined mass) is very likely the model committing to its
+            # final answer, not a stray letter-shaped token from mid-reasoning.
+            if total > 0.5:
+                letter_probs = {L: step_letter_mass.get(L, 0.0) / total for L in option_letters}
+                return raw_text, letter_probs
+
+            if total > best_step_mass:
+                best_step_mass = total
+                best_step_probs = {
+                    L: (step_letter_mass.get(L, 0.0) / total if total > 0 else 0.0)
+                    for L in option_letters
+                }
+
+        # Fallback: no step crossed the 0.5 threshold (unusual formatting).
+        # Use whichever step had the most combined letter-mass rather than
+        # silently returning all-zero.
+        if best_step_mass <= 0:
+            print(f"WARNING: could not locate any answer-letter token in generation "
+                  f"{raw_text!r} -- reward will be 0 for all options.")
+        return raw_text, best_step_probs
 
     def medrag_answer(self, question, options=None, k=32, rrf_k=100, save_dir = None, snippets=None, snippets_ids=None, **kwargs):
         '''

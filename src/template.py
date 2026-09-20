@@ -102,7 +102,7 @@ The Answer section must begin with exactly one line in this format:
 
 Answer: X
 
-where X is exactly one of A, B, C, or D.
+where X is one of A, B, C, or ... .
 
 Do not provide any additional answer choice after this line.
 '''

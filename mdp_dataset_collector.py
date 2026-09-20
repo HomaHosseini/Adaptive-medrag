@@ -43,8 +43,8 @@ except Exception:
 
 load_dotenv()
 
-api_key = os.getenv("ARVAN_API_KEY")
-endpoint = os.getenv("ARVAN_ENDPOINT")
+api_key = os.getenv("CHABOK_API_KEY")
+endpoint = os.getenv("CHABOK_ENDPOINT")
 
 print("API key loaded:", api_key is not None)
 print("Endpoint loaded:", endpoint is not None)
@@ -59,7 +59,7 @@ NUM_SAMPLES = 5
 START_INDEX = 1
 
 MODEL_NAME = (
-    "Arvan/GPT-4o-mini-4s8ra"
+    ""
 )
 
 RETRIEVER_NAME = "MedCPT"
@@ -90,7 +90,7 @@ CHECKPOINT_FILE = (
 # ============================================================
 
 dataset = load_dataset(
-        "TsinghuaC3I/MedXpertQA","Text",
+        "GBaker/MedQA-USMLE-4-options",
         split="test"
     )
 
@@ -117,6 +117,22 @@ medrag = AdaptiveMedRAG(
 
     corpus_cache=True
 )
+
+# ------------------------------------------------------------
+# gpt-4o-mini logprob-based reward scoring (via Arvan) was tried and parked:
+# it required suppressing chain-of-thought reasoning to get clean
+# single-token logprobs, which measurably hurt raw answer accuracy
+# (forced immediate-answer vs. reason-then-answer is a known accuracy hit,
+# independent of which model runs it). Reverted to the original Llama
+# n_trials scoring below, now with an actual temperature fix -- see
+# reward_temperature in evaluate_stop_reward. Kept here, commented, in
+# case it's revisited later with a two-step (reason, then extract letter)
+# version instead of forcing a bare-letter completion in one shot.
+# ------------------------------------------------------------
+# reward_medrag = AdaptiveMedRAG(
+#     llm_name="Arvan/gpt-4o-mini",
+#     rag=False,
+# )
 
 
 # ============================================================
@@ -229,7 +245,7 @@ for idx, item in enumerate(dataset):
     ]
 
     gold = normalize_gold_answer(
-        item["label"]
+        item["answer_idx"]
     )
 
     print("\n")
@@ -366,7 +382,9 @@ for idx, item in enumerate(dataset):
                 options=options,
                 gold=gold,
                 state=state,
-                n_trials=STOP_REWARD_TRIALS
+                n_trials=STOP_REWARD_TRIALS,
+                reward_temperature=0.8,  # was silently 0.0 before -- see mdp_dataset.py fix
+                # reward_llm_runner=reward_medrag,  # gpt-4o-mini logprob path parked, see note above
             )
 
             reward_record = {
@@ -384,7 +402,13 @@ for idx, item in enumerate(dataset):
                     reward["n_trials"],
 
                 "trial_outputs":
-                    reward["trial_outputs"]
+                    reward.get("trial_outputs"),  # None in logprob mode -- see letter_probs/raw_answer instead
+
+                "scoring_method":
+                    reward.get("scoring_method", "n_trials"),
+
+                "letter_probs":
+                    reward.get("letter_probs"),
             }
 
             stop_rewards.append(

@@ -331,6 +331,8 @@ def evaluate_stop_reward(
     gold: str,
     state: Dict[str, Any],
     n_trials: int = 3,
+    reward_llm_runner=None,
+    reward_temperature: float = 0.7,
     **kwargs
 ) -> Dict[str, Any]:
     """
@@ -342,18 +344,23 @@ def evaluate_stop_reward(
         - The exact state context is reused.
         - Only final-answer generation is repeated.
 
+    If `reward_llm_runner` is given (a MedRAG instance with
+    llm_name="OpenAI/gpt-4o-mini" or similar), reward is computed from a
+    SINGLE deterministic call's token logprobs on the gold letter --
+    continuous 0-1, no sampling, no n_trials loop. This is both cheaper
+    (1 call vs n_trials calls) and finer-grained than trial-averaging,
+    since exact-match trial voting with the existing generate() (which
+    runs greedy/temperature=0 decoding) gives no real variation to average
+    over -- any fractional rewards you saw with n_trials averaging were
+    incidental non-determinism in the serving stack, not real sampling.
+
+    If `reward_llm_runner` is None (default), falls back to the original
+    n_trials exact-match voting behavior, unchanged, using medrag_runner.
+
     The reward is:
-
-        mean(correctness over trials)
-
-    For example:
-
-        [1, 1, 0] -> 0.667
-        [1, 1, 1] -> 1.000
-        [0, 0, 0] -> 0.000
+        mean(correctness over trials)          [n_trials mode]
+        P(gold letter | state)                 [reward_llm_runner mode]
     """
-    
-    trial_outputs = []
 
     # ========================================================
     # BUILD OPTION TEXT
@@ -401,8 +408,61 @@ def evaluate_stop_reward(
     ).strip()
 
     # ========================================================
-    # RUN FINAL ANSWER TRIALS
+    # LOGPROB MODE (single call, continuous reward)
     # ========================================================
+
+    if reward_llm_runner is not None:
+
+        if options is None:
+            raise ValueError(
+                "reward_llm_runner (logprob-based reward) requires MCQ "
+                "options -- it scores P(gold letter), which is undefined "
+                "for open-ended questions."
+            )
+
+        option_letters = sorted(options.keys())
+
+        messages = [
+            {
+                "role": "system",
+                "content": medrag_runner.templates["i_medrag_system"],
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"{context}\n\n"
+                    f"{question_prompt}\n\n"
+                    f"Respond with only the single letter of the correct "
+                    f"answer ({', '.join(option_letters)}) and nothing else "
+                    f"-- no explanation, no punctuation."
+                ),
+            },
+        ]
+
+        raw_text, letter_probs = reward_llm_runner.generate_answer_with_letter_probs(
+            messages, option_letters=option_letters,
+        )
+
+        reward = letter_probs.get(gold, 0.0)
+
+        return {
+            "state_id": state.get("state_id"),
+            "iteration": state.get("iteration"),
+            "action": "STOP",
+            "n_trials": 1,
+            "reward": reward,
+            "mean_accuracy": reward,
+            "scoring_method": "logprob",
+            "letter_probs": letter_probs,
+            "raw_answer": raw_text,
+            "queries_so_far": state.get("queries_so_far", None),
+        }
+
+    # ========================================================
+    # N-TRIALS MODE (original behavior, unchanged)
+    # ========================================================
+
+    trial_outputs = []
 
     for trial_idx in range(
         n_trials
@@ -436,6 +496,7 @@ def evaluate_stop_reward(
             raw_answer = (
                 medrag_runner.generate(
                     messages,
+                    temperature=reward_temperature,  # was silently defaulting to 0.0 -- see note above
                     **kwargs
                 )
             )

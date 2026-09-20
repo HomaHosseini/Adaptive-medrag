@@ -1,35 +1,29 @@
-import os, requests, json
+import os, json
 from dotenv import load_dotenv
 load_dotenv()
-ENDPOINT = os.environ["ARVAN_ENDPOINT"]
-API_KEY = os.environ["ARVAN_API_KEY"]
 
-# Replace with whatever exact model string Arvan uses for gpt-4o-mini in
-# your dashboard -- likely something like "gpt-4o-mini" or a longer suffixed
-# name, mirroring how your Llama model is "Llama-3.3-70B-Instruct-R1AI".
-MODEL = "gpt-4o-mini"
+import openai
 
-resp = requests.post(
-    f"{ENDPOINT}/chat/completions",
-    headers={"Authorization": f"apikey {API_KEY}", "Content-Type": "application/json"},
-    json={
-        "model": MODEL,
-        "messages": [{"role": "user", "content": "Reply with only the letter B."}],
-        "max_tokens": 5,
-        "temperature": 0.0,
-        "logprobs": True,
-        "top_logprobs": 5,
-    },
-    timeout=(30, 60),
+openai.api_key = os.environ["CHABOK_API_KEY"]      # your Chabokan key
+openai.api_base = "https://ai.chabokan.net/v1"
+
+resp = openai.ChatCompletion.create(
+    model="meta-llama/llama-3.1-8b-instruct",
+    messages=[{"role": "user", "content": "Reply with only the letter B."}],
+    max_tokens=5,
+    temperature=0.0,
+    logprobs=True,        # <-- this is the actual test, missing from your snippet
+    top_logprobs=5,
 )
 
-print("HTTP status:", resp.status_code)
-data = resp.json()
-print(json.dumps(data, indent=2)[:3000])
+print(json.dumps(resp, indent=2)[:3000] if isinstance(resp, dict) else resp)
 
-choice = data.get("choices", [{}])[0]
-has_logprobs = choice.get("logprobs") is not None
+choice = resp["choices"][0] if isinstance(resp, dict) else resp.choices[0]
+logprobs_field = choice["logprobs"] if isinstance(choice, dict) else choice.logprobs
+
 print("\n--- RESULT ---")
-print("logprobs field present and non-null:", has_logprobs)
-if has_logprobs:
-    print("content entries:", len(choice["logprobs"].get("content", [])))
+print("logprobs field present and non-null:", logprobs_field is not None)
+if logprobs_field:
+    content = logprobs_field["content"] if isinstance(logprobs_field, dict) else logprobs_field.content
+    print("content entries:", len(content))
+    print("first entry:", content[0])
