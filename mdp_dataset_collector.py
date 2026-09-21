@@ -3,11 +3,20 @@ import os
 import time
 import random
 
+# IMPORTANT: load_dotenv() MUST run before importing anything that in turn
+# imports medrag.py, since medrag.py reads OPENAI_API_KEY / OPENAI_API_BASE
+# at MODULE IMPORT TIME (not inside a function). With load_dotenv() called
+# later (as it was before), those os.getenv() calls saw an empty
+# environment and silently fell back to config.py's defaults / the OpenAI
+# SDK's real endpoint -- which is exactly why requests were hitting real
+# OpenAI's servers instead of Chabokan.
+from dotenv import load_dotenv
+load_dotenv()
+
 import numpy as np
 import torch
 
 from datasets import load_dataset
-from dotenv import load_dotenv
 
 from src.adapt_medrag import AdaptiveMedRAG
 from mdp_dataset import (
@@ -41,13 +50,7 @@ try:
 except Exception:
     pass
 
-load_dotenv()
 
-api_key = os.getenv("CHABOK_API_KEY")
-endpoint = os.getenv("CHABOK_ENDPOINT")
-
-print("API key loaded:", api_key is not None)
-print("Endpoint loaded:", endpoint is not None)
 
 
 # ============================================================
@@ -59,7 +62,7 @@ NUM_SAMPLES = 5
 START_INDEX = 1
 
 MODEL_NAME = (
-    ""
+    "OpenAI/meta-llama/llama-3.1-8b-instruct"
 )
 
 RETRIEVER_NAME = "MedCPT"
@@ -384,7 +387,7 @@ for idx, item in enumerate(dataset):
                 state=state,
                 n_trials=STOP_REWARD_TRIALS,
                 reward_temperature=0.8,  # was silently 0.0 before -- see mdp_dataset.py fix
-                # reward_llm_runner=reward_medrag,  # gpt-4o-mini logprob path parked, see note above
+                reward_llm_runner=medrag,  # gpt-4o-mini logprob path parked, see note above
             )
 
             reward_record = {

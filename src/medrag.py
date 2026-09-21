@@ -22,12 +22,28 @@ from config import config
 openai.api_type = openai.api_type or os.getenv("OPENAI_API_TYPE") or config.get("api_type")
 openai.api_version = openai.api_version or os.getenv("OPENAI_API_VERSION") or config.get("api_version")
 openai.api_key = openai.api_key or os.getenv('OPENAI_API_KEY') or config["api_key"]
-# NEW: custom base_url support, needed for OpenAI-SDK-compatible gateways
-# like Liara (base_url points at their endpoint instead of OpenAI's own).
-# Leave OPENAI_BASE_URL unset to keep hitting OpenAI's default endpoint.
-_openai_base_url = os.getenv("OPENAI_BASE_URL") or config.get("base_url")
+
+# ------------------------------------------------------------------
+# Custom base URL support (needed for OpenAI-SDK-compatible gateways like
+# Liara/Chabokan/Arvan's OpenAI-style routes -- base_url points at their
+# endpoint instead of OpenAI's own). IMPORTANT: which env var actually
+# takes effect depends on which openai package version is installed --
+# this project intentionally stays on the legacy (openai<1.0) package, so
+# set OPENAI_API_BASE in your .env, NOT OPENAI_BASE_URL:
+#
+#   openai<1.0 (the branch this project actually uses):
+#       reads OPENAI_API_BASE (see line below, unchanged from upstream)
+#   openai>=1.0 (NOT used here, kept only for forward-compatibility):
+#       reads OPENAI_BASE_URL (via _openai_base_url just below)
+#
+# Setting the wrong one of these two variables will silently fall back to
+# OpenAI's real endpoint instead of erroring -- if requests seem to be
+# hitting OpenAI instead of your gateway, this is the first thing to check.
+# ------------------------------------------------------------------
+_openai_base_url = os.getenv("OPENAI_BASE_URL") or config.get("base_url")  # only read by the openai>=1.0 branch below
 
 if openai.__version__.startswith("0"):
+    # ACTIVE BRANCH for this project. Reads OPENAI_API_BASE (not OPENAI_BASE_URL).
     openai.api_base = openai.api_base or os.getenv("OPENAI_API_BASE") or config.get("api_base")
     if openai.api_type == "azure":
         openai_client = lambda **x: openai.ChatCompletion.create(**{'engine' if k == 'model' else k: v for k, v in x.items()})["choices"][0]["message"]["content"]
@@ -38,6 +54,9 @@ if openai.__version__.startswith("0"):
         openai_client = lambda **x: openai.ChatCompletion.create(**x)["choices"][0]["message"]["content"]
         openai_raw_client = lambda **x: openai.ChatCompletion.create(**x)
 else:
+    # NOT the active branch for this project (staying on openai<1.0 to avoid
+    # breaking other call sites) -- kept here only in case of a future
+    # upgrade. Reads OPENAI_BASE_URL, not OPENAI_API_BASE.
     if openai.api_type == "azure":
         openai.azure_endpoint = openai.azure_endpoint or os.getenv("OPENAI_ENDPOINT") or config.get("azure_endpoint")
         openai_client = lambda **x: openai.AzureOpenAI(
@@ -53,7 +72,7 @@ else:
     else:
         openai_client = lambda **x: openai.OpenAI(
             api_key=openai.api_key,
-            base_url=_openai_base_url,  # NEW: None = OpenAI's default endpoint; set = Liara/other gateway
+            base_url=_openai_base_url,  # None = OpenAI's default endpoint; set = Liara/Chabokan/other gateway
         ).chat.completions.create(**x).choices[0].message.content
         openai_raw_client = lambda **x: openai.OpenAI(
             api_key=openai.api_key,
@@ -102,6 +121,31 @@ class MedRAG:
             elif "gpt-4" in self.model:
                 self.max_length = 32768
                 self.context_length = 30000
+            elif "llama-3" in self.model.lower():
+                # Matches the local-model branch's numbers below. Llama-3.1
+                # and later support a 128k context window; earlier 3.x
+                # variants (plain "llama-3") are 8k.
+                if any(v in self.model for v in (".1", ".2", ".3")):
+                    self.max_length = 131072
+                    self.context_length = 128000
+                else:
+                    self.max_length = 8192
+                    self.context_length = 7168
+            else:
+                # SAFETY NET: this branch previously left max_length/
+                # context_length completely UNSET for any model whose name
+                # didn't match "gpt-3.5"/"gpt-4" -- causing a downstream
+                # AttributeError the first time a different model (e.g. a
+                # Llama variant routed through an OpenAI-compatible gateway)
+                # was used. Always set something conservative rather than
+                # nothing, so a new/unrecognized model degrades gracefully
+                # (shorter context) instead of crashing.
+                print(f"NOTE: no known context-length profile for model "
+                      f"'{self.model}' in the openai branch -- defaulting to "
+                      f"a conservative 8k context. Add a case above if this "
+                      f"model supports more.")
+                self.max_length = 8192
+                self.context_length = 7168
             self.tokenizer = tiktoken.get_encoding("cl100k_base")
         elif "gemini" in self.llm_name.lower():
             import google.generativeai as genai
@@ -237,7 +281,11 @@ class MedRAG:
                     time.sleep(delay)
         elif "openai" in self.llm_name.lower():
 
-            response = openai_client(
+            # Was: openai_client(...), which already unwraps to
+            # .choices[0].message.content (a plain string) -- but this
+            # branch also needs .usage below, so it must use the raw,
+            # full-response variant instead.
+            response = openai_raw_client(
                 model=self.model,
                 messages=messages,
                 temperature=0.0,
@@ -408,25 +456,29 @@ class MedRAG:
             })
         return ans
 
-    def generate_answer_with_letter_probs(self, messages, option_letters, max_tokens=6):
+    def generate_answer_with_letter_probs(self, messages, option_letters, max_tokens=512, temperature=0.0):
         """
-        Single deterministic call that returns a continuous 0-1 probability
-        for each MCQ option letter, extracted from token-level logprobs,
-        instead of running N sampled trials and voting.
+        Single call that returns a continuous 0-1 probability for each MCQ
+        option letter, extracted from token-level logprobs -- WITHOUT
+        forcing a bare-letter completion. `messages` should use your normal
+        reasoning-permitting prompt/template (same as your n_trials answer
+        generation), and this scans across all generated tokens for wherever
+        the model actually commits to its final letter (dominance-based,
+        matching generate_answer_with_letter_probs_local's approach), rather
+        than requiring the answer to be the very first token. This avoids
+        the accuracy cost we found when forcing an immediate bare-letter
+        answer (see the gpt-4o-mini findings) -- confirmed working via
+        Chabokan/OpenRouter-routed Llama-3.1-8B-Instruct with logprobs=True.
 
-        Supports both a direct OpenAI-backed runner (llm_name="OpenAI/...")
-        and an Arvan-gateway-routed one (llm_name="Arvan/...", e.g.
-        "Arvan/gpt-4o-mini") -- IMPORTANT: whether Arvan's gateway actually
-        forwards/returns logprobs is NOT guaranteed and must be verified
-        with a raw test call before relying on this (see
-        test_arvan_logprobs.py). If Arvan doesn't support it, don't use this
-        method -- use the temperature-fix fallback in evaluate_stop_reward's
-        n_trials mode instead.
+        Supports OpenAI-schema gateways (llm_name="OpenAI/...", including
+        Liara/Chabokan/etc. via a custom base_url) and Arvan
+        (llm_name="Arvan/...") -- IMPORTANT: whether a given gateway/model
+        actually returns logprobs is not guaranteed in general and should be
+        verified with a raw test call first (see test_arvan_logprobs.py /
+        test_chabokan_logprobs.py) before relying on this for a new provider.
 
-        `messages` should instruct the model to answer with ONLY the letter
-        so the answer letter appears as (or very near) the first generated
-        token. `option_letters` is the list of valid letters for this
-        question, e.g. ["A", "B", "C", "D"].
+        `option_letters` is the list of valid letters for this question,
+        e.g. ["A", "B", "C", "D"].
 
         Returns: (raw_text, {letter: probability, ...})
         """
@@ -439,6 +491,15 @@ class MedRAG:
                 f"Arvan-backed MedRAG instance, got '{self.llm_name}'."
             )
 
+        request_kwargs = dict(
+            model=self.model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            logprobs=True,
+            top_logprobs=20,
+        )
+
         if is_arvan:
             resp = requests.post(
                 f"{self.api_endpoint}/chat/completions",
@@ -446,14 +507,7 @@ class MedRAG:
                     "Authorization": f"apikey {self.api_key}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "max_tokens": max_tokens,
-                    "temperature": 0.0,
-                    "logprobs": True,
-                    "top_logprobs": 20,
-                },
+                json=request_kwargs,
                 timeout=(60, 180),
             )
             resp.raise_for_status()
@@ -479,20 +533,12 @@ class MedRAG:
             # dict-style entries: [{"token": ..., "top_logprobs": [{"token": ..., "logprob": ...}, ...]}, ...]
             token_entries = (logprobs_obj or {}).get("content", []) or []
 
-            def token_of(e): return e["token"]
             def top_list_of(e): return e.get("top_logprobs", [])
             def cand_token(c): return c["token"]
             def cand_logprob(c): return c["logprob"]
 
-        else:  # is_openai
-            response = openai_raw_client(
-                model=self.model,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=0.0,
-                logprobs=True,
-                top_logprobs=20,
-            )
+        else:  # is_openai (covers any OpenAI-schema gateway via base_url, e.g. Liara/Chabokan)
+            response = openai_raw_client(**request_kwargs)
 
             self.llm_call_count += 1
             usage = response.usage
@@ -512,31 +558,41 @@ class MedRAG:
             raw_text = choice.message.content
             token_entries = choice.logprobs.content if choice.logprobs else []
 
-            def token_of(e): return e.token
             def top_list_of(e): return e.top_logprobs
             def cand_token(c): return c.token
             def cand_logprob(c): return c.logprob
 
-        letter_probs = {letter: 0.0 for letter in option_letters}
+        # Dominance-based scan across ALL generated tokens (not just the
+        # first match) -- with reasoning allowed, an early token could
+        # accidentally look like a letter (e.g. the article "A" mid-sentence)
+        # without actually being the model's answer commitment. Only a
+        # position where option letters combine to >50% of the probability
+        # mass is treated as the real answer; otherwise fall back to
+        # whichever position had the most combined letter-mass.
+        best_mass = -1.0
+        best_probs = {letter: 0.0 for letter in option_letters}
 
         for tok in token_entries:
-            candidates = {cand_token(c).strip().upper(): cand_logprob(c) for c in top_list_of(tok)}
-            matched = {L: candidates[L] for L in option_letters if L in candidates}
-            if matched:
-                exps = {L: math.exp(lp) for L, lp in matched.items()}
-                total = sum(exps.values())
-                letter_probs = {
-                    L: (exps.get(L, 0.0) / total if total > 0 else 0.0)
-                    for L in option_letters
-                }
-                break
+            candidates = {}
+            for c in top_list_of(tok):
+                tok_str = cand_token(c).strip().upper()
+                candidates[tok_str] = math.exp(cand_logprob(c))
+            letter_mass = {L: candidates.get(L, 0.0) for L in option_letters}
+            total = sum(letter_mass.values())
 
-        if all(p == 0.0 for p in letter_probs.values()) and raw_text:
+            if total > 0.5:
+                return raw_text, {L: letter_mass[L] / total for L in option_letters}
+
+            if total > best_mass:
+                best_mass = total
+                best_probs = {L: (letter_mass[L] / total if total > 0 else 0.0) for L in option_letters}
+
+        if best_mass <= 0 and raw_text:
             print(f"WARNING: none of {option_letters} found in top_logprobs for "
-                  f"response {raw_text!r} -- check that the prompt forces a bare-letter "
-                  f"answer, or that this gateway actually returns logprobs at all.")
+                  f"response {raw_text!r} -- check the prompt/template, or that "
+                  f"this gateway actually returns logprobs for this model.")
 
-        return raw_text, letter_probs
+        return raw_text, best_probs
 
     def generate_answer_with_letter_probs_local(self, messages, option_letters, max_new_tokens=512, temperature=0.0):
         """

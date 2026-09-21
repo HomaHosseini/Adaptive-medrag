@@ -421,28 +421,57 @@ def evaluate_stop_reward(
             )
 
         option_letters = sorted(options.keys())
+        is_local = not any(x in reward_llm_runner.llm_name.lower() for x in ("openai", "arvan", "gemini"))
 
-        messages = [
-            {
-                "role": "system",
-                "content": medrag_runner.templates["i_medrag_system"],
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"{context}\n\n"
-                    f"{question_prompt}\n\n"
-                    f"Respond with only the single letter of the correct "
-                    f"answer ({', '.join(option_letters)}) and nothing else "
-                    f"-- no explanation, no punctuation."
-                ),
-            },
-        ]
+        if is_local:
+            # Reasoning-preserving path: SAME messages/template as the
+            # n_trials branch below (full chain-of-thought allowed), so
+            # there is no accuracy cost. The per-letter probability is read
+            # off the model's own logits at wherever it actually commits to
+            # its final answer, not forced onto the first token.
+            messages = [
+                {
+                    "role": "system",
+                    "content": medrag_runner.templates["i_medrag_system"],
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"{context}\n\n"
+                        f"{question_prompt}\n\n"
+                        f"{medrag_runner.templates['follow_up_answer']}"
+                    ),
+                },
+            ]
+            raw_text, letter_probs = reward_llm_runner.generate_answer_with_letter_probs_local(
+                messages, option_letters=option_letters,
+            )
+            
+        else:
+            # API-based path (OpenAI-schema gateway, e.g. Liara/Chabokan, or
+            # Arvan): now uses the SAME reasoning-permitting template as the
+            # local path -- confirmed working via Chabokan-routed
+            # Llama-3.1-8B-Instruct returning populated logprobs on normal
+            # (non-bare-letter) completions. No accuracy cost vs. n_trials.
+            messages = [
+                {
+                    "role": "system",
+                    "content": medrag_runner.templates["i_medrag_system"],
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"{context}\n\n"
+                        f"{question_prompt}\n\n"
+                        f"{medrag_runner.templates['follow_up_answer']}"
+                    ),
+                },
+            ]
+            raw_text, letter_probs = reward_llm_runner.generate_answer_with_letter_probs(
+                messages, option_letters=option_letters,
+            )
 
-        raw_text, letter_probs = reward_llm_runner.generate_answer_with_letter_probs(
-            messages, option_letters=option_letters,
-        )
-
+       
         reward = letter_probs.get(gold, 0.0)
 
         return {
@@ -452,7 +481,7 @@ def evaluate_stop_reward(
             "n_trials": 1,
             "reward": reward,
             "mean_accuracy": reward,
-            "scoring_method": "logprob",
+            "scoring_method": "logprob_local" if is_local else "logprob_api",
             "letter_probs": letter_probs,
             "raw_answer": raw_text,
             "queries_so_far": state.get("queries_so_far", None),
