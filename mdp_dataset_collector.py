@@ -54,12 +54,12 @@ print("Endpoint loaded:", endpoint is not None)
 # SETTINGS
 # ============================================================
 
-NUM_SAMPLES = 5
+NUM_SAMPLES = 50
 
-START_INDEX = 1
+START_INDEX = 201
 
 MODEL_NAME = (
-    "Arvan/GPT-4o-mini-4s8ra"
+    "Arvan/Llama-3-3-70B-Instruct-R1AI"
 )
 
 RETRIEVER_NAME = "MedCPT"
@@ -76,7 +76,7 @@ STOP_REWARD_TRIALS = 3
 
 # Main output
 OUTPUT_FILE = (
-    "stage1_mdp_dataset_shuffled_10q_MedExpert.json"
+    "stage1_mdp_dataset_shuffled_200_250q.json"
 )
 
 # Checkpoint that is updated after EVERY question
@@ -90,13 +90,14 @@ CHECKPOINT_FILE = (
 # ============================================================
 
 dataset = load_dataset(
-        "TsinghuaC3I/MedXpertQA","Text",
+        "GBaker/MedQA-USMLE-4-options",
         split="test"
     )
 
 
 dataset = dataset.shuffle(seed=SEED)
-dataset = dataset.select(range(NUM_SAMPLES))
+print(dataset)
+dataset = dataset.select(range(START_INDEX-1, NUM_SAMPLES+START_INDEX-1))
 
 
 # ============================================================
@@ -229,7 +230,7 @@ for idx, item in enumerate(dataset):
     ]
 
     gold = normalize_gold_answer(
-        item["label"]
+        item["answer_idx"]
     )
 
     print("\n")
@@ -366,7 +367,8 @@ for idx, item in enumerate(dataset):
                 options=options,
                 gold=gold,
                 state=state,
-                n_trials=STOP_REWARD_TRIALS
+                n_trials=STOP_REWARD_TRIALS,
+                reward_temperature=0.9
             )
 
             reward_record = {

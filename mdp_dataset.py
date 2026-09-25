@@ -331,6 +331,7 @@ def evaluate_stop_reward(
     gold: str,
     state: Dict[str, Any],
     n_trials: int = 3,
+    reward_temperature: float = 0.9,
     **kwargs
 ) -> Dict[str, Any]:
     """
@@ -436,6 +437,7 @@ def evaluate_stop_reward(
             raw_answer = (
                 medrag_runner.generate(
                     messages,
+                    temperature=reward_temperature,
                     **kwargs
                 )
             )
