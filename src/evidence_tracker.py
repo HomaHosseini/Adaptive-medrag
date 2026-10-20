@@ -102,9 +102,7 @@ class EvidenceTracker:
             1e-12
         )
 
-    # ==========================================================
-    # 4. SEMANTIC NOVELTY
-    # ==========================================================
+    
 
     def semantic_novelty(
         self,
@@ -140,8 +138,7 @@ class EvidenceTracker:
             current @ previous.T
         )
 
-        # For every new document, find its closest
-        # previously retrieved document.
+        
         max_similarity = similarity_matrix.max(
             axis=1
         )
@@ -178,15 +175,7 @@ class EvidenceTracker:
 
 
     def update(self, current_ids):
-        """
-        Process one retrieval iteration.
-
-        Returns a dictionary containing all evidence statistics.
-        """
-
-        # ========================================================
-        # 1. CLEAN / DEDUPLICATE IDS
-        # ========================================================
+        
 
         current_ids = list(
             dict.fromkeys(
@@ -196,9 +185,7 @@ class EvidenceTracker:
             )
         )
 
-        # ========================================================
-        # 2. DOCUMENT NOVELTY
-        # ========================================================
+        
 
         document_novelty, num_new_documents = (
             self.document_novelty(
@@ -206,9 +193,7 @@ class EvidenceTracker:
             )
         )
 
-        # ========================================================
-        # 3. MEDCPT EMBEDDINGS
-        # ========================================================
+       
 
         current_embeddings, found_ids = (
             self.get_embeddings(
@@ -216,9 +201,7 @@ class EvidenceTracker:
             )
         )
 
-        # ========================================================
-        # 4. SEMANTIC NOVELTY
-        # ========================================================
+        
 
         semantic_stats = (
             self.semantic_novelty(
@@ -226,9 +209,7 @@ class EvidenceTracker:
             )
         )
 
-        # ========================================================
-        # 5. SAVE RESULT
-        # ========================================================
+        
 
         result = {
             "num_documents":
@@ -283,25 +264,18 @@ class EvidenceTracker:
                 semantic_stats is not None
         }
 
-        # ========================================================
-        # 6. SAVE HISTORY
-        # ========================================================
+        
 
         self.history.append(
             result
         )
 
-        # ========================================================
-        # 7. UPDATE CUMULATIVE DOCUMENT IDS
-        # ========================================================
-
+        
         self.previous_document_ids.update(
             current_ids
         )
 
-        # ========================================================
-        # 8. UPDATE CUMULATIVE EMBEDDINGS
-        # ========================================================
+        
 
         if current_embeddings is not None:
 
@@ -327,9 +301,7 @@ class EvidenceTracker:
 
         
     def reset(self):
-        """
-        Reset tracker state for a new question / trajectory.
-        """
+        
 
         self.previous_document_ids = set()
         self.previous_embeddings = None

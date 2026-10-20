@@ -43,11 +43,7 @@ except Exception:
 
 load_dotenv()
 
-api_key = os.getenv("ARVAN_API_KEY")
-endpoint = os.getenv("ARVAN_ENDPOINT")
 
-print("API key loaded:", api_key is not None)
-print("Endpoint loaded:", endpoint is not None)
 
 
 # ============================================================
@@ -56,10 +52,10 @@ print("Endpoint loaded:", endpoint is not None)
 
 NUM_SAMPLES = 50
 
-START_INDEX = 201
+START_INDEX = 251
 
 MODEL_NAME = (
-    "Arvan/Llama-3-3-70B-Instruct-R1AI"
+    "chabokan/gpt-4o-mini"
 )
 
 RETRIEVER_NAME = "MedCPT"
@@ -76,7 +72,7 @@ STOP_REWARD_TRIALS = 3
 
 # Main output
 OUTPUT_FILE = (
-    "stage1_mdp_dataset_shuffled_200_250q.json"
+    "stage1_mdp_dataset_shuffled_250_300q.json"
 )
 
 # Checkpoint that is updated after EVERY question
@@ -120,22 +116,14 @@ medrag = AdaptiveMedRAG(
 )
 
 
-# ============================================================
-# RECORDS
-# ============================================================
+
 
 question_records = []
 
 
-# ============================================================
-# SAVE FUNCTION
-# ============================================================
 
 def save_checkpoint(records, filepath):
-    """
-    Save all completed questions immediately.
-    This protects against network/API/computer failures.
-    """
+    
 
     output = {
 
@@ -187,9 +175,7 @@ def save_checkpoint(records, filepath):
             make_json_safe(records)
     }
 
-    # Write to a temporary file first.
-    # If something happens during writing, the previous
-    # checkpoint is less likely to be corrupted.
+
     temp_file = filepath + ".tmp"
 
     with open(
@@ -211,9 +197,7 @@ def save_checkpoint(records, filepath):
     )
 
 
-# ============================================================
-# QUESTIONS
-# ============================================================
+
 
 for idx, item in enumerate(dataset):
 
@@ -245,9 +229,7 @@ for idx, item in enumerate(dataset):
 
     try:
 
-        # ====================================================
-        # FULL TRAJECTORY
-        # ====================================================
+
 
         trajectory_result = medrag.collect_full_trajectory(
 
@@ -270,21 +252,13 @@ for idx, item in enumerate(dataset):
             ]
         )
 
-        # ====================================================
-        # STOP REWARD
-        # ====================================================
 
-        
         stop_rewards = []
 
         for i, state in enumerate(trajectory):
 
             iteration = state["iteration"]
 
-            # print("\n")
-            # print(
-            #     f"Evaluating STOP reward for S{iteration}"
-            # )
 
             print(
                 f"[DEBUG] Evaluating state: "
@@ -311,9 +285,7 @@ for idx, item in enumerate(dataset):
             #     f"Context tail:\n{state['context'][-1000:]}"
             # )
 
-            # ------------------------------------------------
-            # Compare with next state
-            # ------------------------------------------------
+            
 
             if i < len(trajectory) - 1:
 
@@ -398,9 +370,7 @@ for idx, item in enumerate(dataset):
                 f"{reward['reward']:.3f}"
             )
 
-        # ====================================================
-        # MDP TRANSITIONS
-        # ====================================================
+        
 
         transitions = []
 
@@ -408,9 +378,7 @@ for idx, item in enumerate(dataset):
             trajectory
         ):
 
-            # ------------------------------------------------
-            # STOP
-            # ------------------------------------------------
+            
 
             transitions.append({
 
@@ -435,9 +403,7 @@ for idx, item in enumerate(dataset):
                     None
             })
 
-            # ------------------------------------------------
-            # CONTINUE
-            # ------------------------------------------------
+            
 
             if i < len(
                 trajectory
@@ -466,9 +432,7 @@ for idx, item in enumerate(dataset):
                         ]["state_id"]
                 })
 
-        # ====================================================
-        # QUESTION RECORD
-        # ====================================================
+        
 
         question_record = {
 
@@ -484,30 +448,18 @@ for idx, item in enumerate(dataset):
             "gold":
                 gold,
 
-            # -----------------------------------------------
-            # Full trajectory
-            # -----------------------------------------------
+
 
             "trajectory":
                 trajectory,
 
-            # -----------------------------------------------
-            # STOP reward
-            # -----------------------------------------------
 
             "stop_rewards":
                 stop_rewards,
 
-            # -----------------------------------------------
-            # MDP transitions
-            # -----------------------------------------------
 
             "mdp_transitions":
                 transitions,
-
-            # -----------------------------------------------
-            # Full trajectory result
-            # -----------------------------------------------
 
             "full_trajectory_answer":
                 trajectory_result[
@@ -520,17 +472,13 @@ for idx, item in enumerate(dataset):
                 ]
         }
 
-        # ====================================================
-        # ADD SUCCESSFUL QUESTION
-        # ====================================================
+
 
         question_records.append(
             question_record
         )
 
-        # ====================================================
-        # SAVE IMMEDIATELY
-        # ====================================================
+
 
         save_checkpoint(
             question_records,
@@ -554,9 +502,7 @@ for idx, item in enumerate(dataset):
 
     except Exception as e:
 
-        # ====================================================
-        # ERROR
-        # ====================================================
+
 
         print("\n")
         print("!" * 100)
@@ -590,9 +536,7 @@ for idx, item in enumerate(dataset):
         continue
 
 
-# ============================================================
-# FINAL OUTPUT
-# ============================================================
+
 
 output = {
 
@@ -647,9 +591,6 @@ output = {
 }
 
 
-# ============================================================
-# SAVE FINAL FILE
-# ============================================================
 
 with open(
     OUTPUT_FILE,

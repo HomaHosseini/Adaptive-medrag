@@ -87,7 +87,7 @@ def download_and_extract_zip(url, zip_path, extract_dir):
 
     os.remove(zip_path)
 
-class CustomizeSentenceTransformer(SentenceTransformer): # change the default pooling "MEAN" to "CLS"
+class CustomizeSentenceTransformer(SentenceTransformer): 
 
     def _load_auto_model(self, model_name_or_path, *args, **kwargs):
         """
@@ -263,9 +263,7 @@ class Retriever:
 
                     embedding_url = None
 
-                    # -------------------------------------------------------
-                    # TEXTBOOKS
-                    # -------------------------------------------------------
+                    
 
                     if self.corpus_name == "textbooks":
 
@@ -293,9 +291,7 @@ class Retriever:
                                 "?download=1"
                             )
 
-                    # -------------------------------------------------------
-                    # PUBMED
-                    # -------------------------------------------------------
+                    
 
                     elif self.corpus_name == "pubmed":
 
@@ -323,9 +319,7 @@ class Retriever:
                                 "?download=1"
                             )
 
-                    # -------------------------------------------------------
-                    # WIKIPEDIA
-                    # -------------------------------------------------------
+                    
 
                     elif self.corpus_name == "wikipedia":
 
@@ -414,7 +408,7 @@ class Retriever:
         else:
             return self.idx2txt(indices), scores
 
-    def idx2txt(self, indices): # return List of Dict of str
+    def idx2txt(self, indices):
         '''
         Input: List of Dict( {"source": str, "index": int} )
         Output: List of str
@@ -628,12 +622,12 @@ class DocExtracter:
 
 def robust_parse_json(response_text):
     """Safely extracts and parses JSON from LLM outputs."""
-    # 1. Strip markdown code blocks if the LLM added them
+    
     match = re.search(r"```(?:json)?\n(.*?)```", response_text, re.DOTALL)
     if match:
         response_text = match.group(1)
     
-    # 2. Fix common syntax errors (like trailing commas before brackets/braces)
+    
     response_text = re.sub(r',\s*([\]}])', r'\1', response_text)
     
     try:

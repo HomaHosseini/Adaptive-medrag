@@ -63,13 +63,32 @@ class MedRAG:
             self.retrieval_system = None
         self.templates = {"cot_system": general_cot_system, "cot_prompt": general_cot,
                     "medrag_system": general_medrag_system, "medrag_prompt": general_medrag}
-        if self.llm_name.split('/')[0].lower() == "arvan":
+        if self.llm_name.split('/')[0].lower() in ("arvan", "arvancloud"):
+            # "ArvanCloud/GPT-4o-mini" or "Arvan/GPT-4o-mini" -> model sent is "GPT-4o-mini"
             self.model = '/'.join(self.llm_name.split('/')[1:])
-            self.api_key = os.environ["ARVAN_API_KEY"]
-            self.api_endpoint = os.environ["ARVAN_ENDPOINT"]
+            self.api_key = os.getenv("ARVAN_API_KEY") or os.getenv("API_KEY") or config.get("api_key")
+            self.api_endpoint = (os.getenv("ARVAN_ENDPOINT") or os.getenv("API_BASE")
+                                 or config.get("api_base") or "https://api.arvancloudai.ir/v1")
+            if not self.api_key:
+                raise RuntimeError("Set ARVAN_API_KEY (or API_KEY) with your ArvanCloud key.")
 
             self.max_length = 32768
             self.context_length = 30000
+            self.tokenizer = tiktoken.get_encoding("cl100k_base")
+        elif self.llm_name.split('/')[0].lower() == "chabokan":
+            # "Chabokan/meta-llama/llama-3.1-8b-instruct" -> model "meta-llama/llama-3.1-8b-instruct"
+            self.model = '/'.join(self.llm_name.split('/')[1:])
+            self.api_key = os.getenv("CHABOKAN_API_KEY") or config.get("chabokan_api_key")
+            self.api_endpoint = (os.getenv("CHABOKAN_API_BASE") or config.get("chabokan_api_base")
+                                 or "https://ai.chabokan.net/v1")
+            if not self.api_key:
+                raise RuntimeError("Set CHABOKAN_API_KEY with your Chabokan key.")
+            if "llama-3.1" in self.model.lower() or "llama-3.2" in self.model.lower():
+                self.max_length = 131072
+                self.context_length = 128000
+            else:
+                self.max_length = 8192
+                self.context_length = 7000
             self.tokenizer = tiktoken.get_encoding("cl100k_base")
         elif self.llm_name.split('/')[0].lower() == "openai":
             self.model = self.llm_name.split('/')[-1]
@@ -148,70 +167,53 @@ class MedRAG:
         stopping_criteria = StoppingCriteriaList([CustomStoppingCriteria(stop_str, self.tokenizer, input_len)])
         return stopping_criteria
 
+    def _chat_compatible(self, base_url, api_key, provider, messages, **kwargs):
+        """OpenAI-compatible chat call (ArvanCloud / Chabokan) via the openai client:
+        Bearer auth + custom base_url, with retries and token accounting."""
+        if openai.__version__.startswith("0"):
+            raise RuntimeError(f"{provider} support requires openai>=1.0 (pip install -U openai).")
+        client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=180)
+        retryable = (openai.APIConnectionError, openai.APITimeoutError,
+                     openai.RateLimitError, openai.InternalServerError)
+        max_retries, base_delay = 3, 2
+        for attempt in range(max_retries):
+            try:
+                response = client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=kwargs.get("temperature", 0.0),
+                    max_tokens=kwargs.get("max_tokens", 2048),
+                )
+                usage = getattr(response, "usage", None)
+                prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+                completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+                total_tokens = getattr(usage, "total_tokens", 0) or (prompt_tokens + completion_tokens)
+                self.llm_call_count += 1
+                self.prompt_tokens += prompt_tokens
+                self.completion_tokens += completion_tokens
+                self.total_tokens += total_tokens
+                self.llm_call_history.append({
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                })
+                return response.choices[0].message.content
+            except retryable as e:
+                if attempt == max_retries - 1:
+                    print(f"CRITICAL: {provider} API failed after {max_retries} attempts. Error: {e}")
+                    raise
+                delay = base_delay * (2 ** attempt)
+                print(f"{provider} error: {e}. Retrying in {delay} seconds...")
+                time.sleep(delay)
+
     def generate(self, messages, **kwargs):
         '''
         generate response given messages
         '''
         if "arvan" in self.llm_name.lower():
-            max_retries = 3
-            base_delay = 2
-
-            for attempt in range(max_retries):
-                try:
-                    response = requests.post(
-                        f"{self.api_endpoint}/chat/completions",
-                        headers={
-                            "Authorization": f"apikey {self.api_key}",
-                            "Content-Type": "application/json",
-                        },
-                        json={
-                            "model": self.model,
-                            "messages": messages,
-                            "max_tokens": kwargs.get("max_tokens", 2048),
-                            "temperature": kwargs.get("temperature", 0.0),
-                        },
-                        timeout=(60, 180),
-                    )
-
-                    response.raise_for_status()
-                    data = response.json()
-                    usage = data.get("usage", {})
-                    self.llm_call_count += 1
-
-                    prompt_tokens = usage.get(
-                        "prompt_tokens",
-                        0
-                    )
-
-                    completion_tokens = usage.get(
-                        "completion_tokens",
-                        0
-                    )
-
-                    total_tokens = usage.get(
-                        "total_tokens",
-                        prompt_tokens + completion_tokens
-                    )
-
-                    self.llm_call_history.append({
-                        "prompt_tokens": prompt_tokens,
-                        "completion_tokens": completion_tokens,
-                        "total_tokens": total_tokens
-                    })
-                    self.prompt_tokens += prompt_tokens
-                    self.completion_tokens += completion_tokens
-                    self.total_tokens += total_tokens
-
-                    return data["choices"][0]["message"]["content"]
-
-                except requests.exceptions.RequestException as e:
-                    if attempt == max_retries - 1:
-                        print(f"CRITICAL: Arvan API failed after {max_retries} attempts. Error: {e}")
-                        raise
-                    
-                    delay = base_delay * (2 ** attempt)
-                    print(f"Network error: {e}. Retrying Arvan API in {delay} seconds...")
-                    time.sleep(delay)
+            return self._chat_compatible(self.api_endpoint, self.api_key, "Arvan", messages, **kwargs)
+        elif "chabokan" in self.llm_name.lower():
+            return self._chat_compatible(self.api_endpoint, self.api_key, "Chabokan", messages, **kwargs)
         elif "openai" in self.llm_name.lower():
 
             response = openai_client(
@@ -395,7 +397,7 @@ class MedRAG:
             max_tokens=max_tokens,
             temperature=0.0,
             logprobs=True,
-            top_logprobs=20,  # OpenAI's max; option letters should appear well within this
+            top_logprobs=20,  
         )
 
         self.llm_call_count += 1
@@ -418,15 +420,12 @@ class MedRAG:
         letter_probs = {letter: 0.0 for letter in option_letters}
         token_entries = choice.logprobs.content if choice.logprobs else []
 
-        # Scan generated tokens for the first one whose top-k candidates include
-        # at least one valid option letter -- that's the "answer" token position.
+        
         for tok in token_entries:
             candidates = {c.token.strip().upper(): c.logprob for c in tok.top_logprobs}
             matched = {L: candidates[L] for L in option_letters if L in candidates}
             if matched:
-                # Softmax restricted to just the option letters seen at this
-                # position, so probabilities are comparable across options
-                # even though other (irrelevant) tokens also had mass.
+                
                 exps = {L: math.exp(lp) for L, lp in matched.items()}
                 total = sum(exps.values())
                 letter_probs = {
@@ -453,7 +452,7 @@ class MedRAG:
         else:
             options = ''
 
-        # retrieve relevant snippets
+        
         if self.rag:
             if snippets is not None:
                 retrieved_snippets = snippets[:k]
@@ -470,7 +469,7 @@ class MedRAG:
             contexts = ["Document [{:d}] (Title: {:s}) {:s}".format(idx, retrieved_snippets[idx]["title"], retrieved_snippets[idx]["content"]) for idx in range(len(retrieved_snippets))]
             if len(contexts) == 0:
                 contexts = [""]
-            if "openai" in self.llm_name.lower() or "arvan" in self.llm_name.lower():
+            if "openai" in self.llm_name.lower() or "arvan" in self.llm_name.lower() or "chabokan" in self.llm_name.lower():
                 contexts = [self.tokenizer.decode(self.tokenizer.encode("\n".join(contexts))[:self.context_length])]
             elif "gemini" in self.llm_name.lower():
                 contexts = [self.tokenizer.decode(self.tokenizer.encode("\n".join(contexts))[:self.context_length])]

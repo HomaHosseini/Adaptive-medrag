@@ -7,15 +7,10 @@ import re
 from .evidence_tracker import EvidenceTracker
 from .evidence_coverage import EvidenceCoverageAnalyzer
 from .question_planner import QuestionPlanner
-from .Q_network_dataset_and_training.Q_network_trainin import StopRAGController
-
-stop_rag = StopRAGController("src\\Q_network_dataset_and_training\\", margin_threshold=0.05)  # tune threshold, see below
+from .Q_network import TrainedStopRAGController
 
 
 
-# ============================================================
-# JSON HELPER
-# ============================================================
 
 def parse_json_response(response):
     """
@@ -30,7 +25,7 @@ def parse_json_response(response):
     if not text:
         raise ValueError("LLM returned empty response.")
 
-    # Remove markdown fences
+    
     text = re.sub(
         r"^```json\s*",
         "",
@@ -52,7 +47,7 @@ def parse_json_response(response):
 
     text = text.strip()
 
-    # Direct JSON
+    
     try:
         parsed = json.loads(text)
 
@@ -62,7 +57,7 @@ def parse_json_response(response):
     except json.JSONDecodeError:
         pass
 
-    # Extract JSON object
+    
     start = text.find("{")
     end = text.rfind("}")
 
@@ -82,7 +77,6 @@ def parse_json_response(response):
     except json.JSONDecodeError:
         pass
 
-    # Optional repair
     try:
         import json_repair
 
@@ -103,9 +97,6 @@ def parse_json_response(response):
         "Unable to parse JSON response."
     )
 
-# ============================================================
-# CONTROLLER UTILITIES
-# ============================================================
 
 def clamp01(value, default=0.5):
     """
@@ -133,55 +124,6 @@ def confidence_to_01(confidence):
         return 0.5
 
 
-# ============================================================
-# DETERMINISTIC QUERY-BUDGET CONTROLLER
-# ============================================================
-# def choose_query_budget(
-#     confidence,
-#     answerable,
-#     discrimination,
-#     novelty=None,
-#     iteration=1,
-#     max_iterations=3,
-#     has_options=True,
-# ):
-#     """
-#     Stage-1 confidence controller.
-
-#     STOP when evidence is judged sufficient.
-#     """
-
-#     if iteration >= max_iterations:
-#         return 0
-
-#     c = confidence / 100.0
-#     d = 1.0 if discrimination else 0.0
-
-#     # --------------------------------------------
-#     # STOP
-#     # --------------------------------------------
-
-#     if answerable and c >= 0.80:
-#         if not has_options or d >= 0.70:
-#             return 0
-
-#     # --------------------------------------------
-#     # CONTINUE
-#     # --------------------------------------------
-
-#     if not answerable:
-#         return 2
-
-#     if has_options and d < 0.70:
-#         return 2
-
-#     if c < 0.50:
-#         return 4
-
-#     if c < 0.70:
-#         return 2
-
-#     return 1
 
 def choose_query_budget(
     confidence,
@@ -207,16 +149,9 @@ def choose_query_budget(
         4 = retrieve 4 more queries
     """
 
-    # --------------------------------------------------------
-    # Safety limit
-    # --------------------------------------------------------
-
     if iteration >= max_iterations:
         return 0
 
-    # --------------------------------------------------------
-    # Normalize
-    # --------------------------------------------------------
 
     c = max(0.0, min(1.0, confidence / 100.0))
     d = 1.0 if discrimination else 0.0
@@ -233,68 +168,56 @@ def choose_query_budget(
     else:
         n = 0.5
 
-    # --------------------------------------------------------
-    # STOP
-    # --------------------------------------------------------
 
-    # Never stop if the gate says the evidence is insufficient.
+    
     if not answerable:
-        if c < 0.50:
-            return 4
+        # if c < 0.50:
+        #     return 4
         return 2
 
-    # For MCQ, require discrimination.
+    
     if has_options and d < 0.70:
         return 2
 
-    # Strong confidence.
+    
     if c >= 0.8:
 
-        # Novelty available:
-        # low novelty means additional retrieval is probably
-        # redundant, so stop.
+        
         if novelty_available:
             if n <= 0.30:
                 return 0
 
-            # Evidence is strong, but retrieval is still
-            # finding new information.
-            return 1
+            
+            # return 1
+            return 2
 
-        # No novelty signal -> confidence alone can stop.
+        
         return 0
 
-    # --------------------------------------------------------
-    # VERY LOW CONFIDENCE
-    # --------------------------------------------------------
+    
 
     if c < 0.50:
-        return 4
+        # return 4
+        return 2
 
-    # --------------------------------------------------------
-    # MODERATE CONFIDENCE
-    # --------------------------------------------------------
+    
 
     if c < 0.70:
 
-        # If retrieval is still producing new information,
-        # give it another chance with a larger budget.
+        
         if novelty_available and n > 0.50:
             return 2
 
         return 2
 
-    # --------------------------------------------------------
-    # REASONABLY CONFIDENT
-    # --------------------------------------------------------
+    
 
-    # Confidence is decent but not enough to stop.
-    # High novelty means retrieval is still productive.
+    
     if novelty_available and n > 0.50:
         return 2
 
-    # Otherwise only one more query.
-    return 1
+    
+    return 2
 
 def check_stopping_gate(
     medrag_instance,
@@ -307,45 +230,9 @@ def check_stopping_gate(
     use_options_in_gate=False,
     pre_retrieval=False,
 ):
-    """
-    LLM-based SIGNAL ESTIMATOR.
+    
 
-    IMPORTANT:
-        This function does NOT decide STOP / CONTINUE.
-
-    The LLM only estimates:
-        - confidence
-        - answerability
-        - option discrimination
-
-    Python decides the actual retrieval budget afterward.
-
-    Modes
-    -----
-    pre_retrieval=False:
-        Used for S1/S2/S3 and by the existing adaptive RAG.
-        Confidence/answerability are based on the currently
-        retrieved evidence.
-
-    pre_retrieval=True:
-        Used for S0.
-        No retrieved evidence is available. The LLM estimates
-        whether the question is likely answerable without retrieval.
-
-    Returns
-    -------
-    tuple:
-        (
-            confidence,
-            answerable,
-            discrimination_sufficient,
-            reasoning
-        )
-    """
-
-    # ========================================================
-    # DEFAULT GATE FEATURES
-    # ========================================================
+    
 
     if gate_features is None:
 
@@ -360,9 +247,7 @@ def check_stopping_gate(
             gate_features
         )
 
-    # ========================================================
-    # AUTOMATICALLY ENABLE DISCRIMINATION
-    # ========================================================
+   
 
     if (
         use_options_in_gate
@@ -374,9 +259,7 @@ def check_stopping_gate(
             "discrimination"
         )
 
-    # ========================================================
-    # OPTIONS
-    # ========================================================
+   
 
     option_text = ""
 
@@ -400,15 +283,10 @@ def check_stopping_gate(
             option_lines
         )
 
-    # ========================================================
-    # BUILD SIGNAL TEXT
-    # ========================================================
 
     signal_text = []
 
-    # --------------------------------------------------------
-    # PRE-RETRIEVAL MODE
-    # --------------------------------------------------------
+  
 
     if pre_retrieval:
 
@@ -431,9 +309,7 @@ def check_stopping_gate(
 
     else:
 
-        # ----------------------------------------------------
-        # COVERAGE
-        # ----------------------------------------------------
+        
 
         if "coverage" in gate_features:
 
@@ -500,10 +376,7 @@ Requirement status:
 """
                 )
 
-        # ----------------------------------------------------
-        # NOVELTY
-        # ----------------------------------------------------
-
+      
         if "novelty" in gate_features:
 
             if evidence_stats is None:
@@ -524,9 +397,7 @@ SEMANTIC NOVELTY:
 """
                 )
 
-        # ----------------------------------------------------
-        # REDUNDANCY
-        # ----------------------------------------------------
+        
 
         if "redundancy" in gate_features:
 
@@ -548,9 +419,7 @@ SEMANTIC REDUNDANCY:
 """
                 )
 
-    # ========================================================
-    # DISCRIMINATION
-    # ========================================================
+   
 
     if "discrimination" in gate_features:
 
@@ -589,15 +458,9 @@ Do NOT rely on outside medical knowledge.
         signal_text
     )
 
-    # ========================================================
-    # FEATURE INSTRUCTIONS
-    # ========================================================
 
     feature_instructions = []
 
-    # --------------------------------------------------------
-    # CONFIDENCE
-    # --------------------------------------------------------
 
     if "confidence" in gate_features:
 
@@ -640,9 +503,7 @@ or contradictory, lower the score.
 """
             )
 
-    # --------------------------------------------------------
-    # ANSWERABILITY
-    # --------------------------------------------------------
+
 
     if "answerable" in gate_features:
 
@@ -682,9 +543,7 @@ It does NOT mean that you personally know the answer.
 """
             )
 
-    # --------------------------------------------------------
-    # COVERAGE
-    # --------------------------------------------------------
+
 
     if "coverage" in gate_features:
 
@@ -699,9 +558,7 @@ important evidence may still be absent.
 """
         )
 
-    # --------------------------------------------------------
-    # NOVELTY
-    # --------------------------------------------------------
+
 
     if "novelty" in gate_features:
 
@@ -720,9 +577,7 @@ It indicates that retrieval is still finding new material.
 """
         )
 
-    # --------------------------------------------------------
-    # REDUNDANCY
-    # --------------------------------------------------------
+
 
     if "redundancy" in gate_features:
 
@@ -737,9 +592,7 @@ Low redundancy means the latest retrieval is more distinct.
 """
         )
 
-    # --------------------------------------------------------
-    # DISCRIMINATION
-    # --------------------------------------------------------
+
 
     if "discrimination" in gate_features:
 
@@ -767,9 +620,7 @@ ambiguous to reliably distinguish the candidates.
         feature_instructions
     )
 
-    # ========================================================
-    # OPTIONS SECTION
-    # ========================================================
+
 
     options_section = ""
 
@@ -794,9 +645,6 @@ Do NOT rank the options.
 Do NOT use an option as a substitute for missing evidence.
 """
 
-    # ========================================================
-    # AVAILABLE INFORMATION SECTION
-    # ========================================================
 
     if pre_retrieval:
 
@@ -820,9 +668,7 @@ RETRIEVED EVIDENCE
 {context}
 """
 
-    # ========================================================
-    # PROMPT
-    # ========================================================
+
 
     gate_prompt = f"""
 You are an evidence assessment module inside an adaptive
@@ -914,9 +760,7 @@ Do NOT include:
 - option letter as your answer
 """
 
-    # ========================================================
-    # API CALL
-    # ========================================================
+
 
     try:
 
@@ -943,9 +787,6 @@ Do NOT include:
             response
         )
 
-        # ====================================================
-        # ANSWERABILITY
-        # ====================================================
 
         answerable_value = result.get(
             "answerable",
@@ -968,9 +809,7 @@ Do NOT include:
                 answerable_value
             )
 
-        # ====================================================
-        # CONFIDENCE
-        # ====================================================
+
 
         try:
 
@@ -996,9 +835,7 @@ Do NOT include:
             )
         )
 
-        # ====================================================
-        # DISCRIMINATION
-        # ====================================================
+
 
         discrimination_value = result.get(
             "discrimination_sufficient",
@@ -1021,9 +858,7 @@ Do NOT include:
                 discrimination_value
             )
 
-        # ====================================================
-        # REASONING
-        # ====================================================
+
 
         reasoning = str(
             result.get(
@@ -1032,9 +867,7 @@ Do NOT include:
             )
         ).strip()
 
-        # ====================================================
-        # DIAGNOSTICS
-        # ====================================================
+
 
         print(
             f"   [Assessment Mode]: "
@@ -1110,23 +943,16 @@ class AdaptiveMedRAG(MedRAG):
         initial_queries=2,
         confidence_threshold=85,
 
-        # ----------------------------------------------------
-        # Planner
-        # ----------------------------------------------------
+
 
         use_planner=False,
         use_planner_budget=False,
 
-        # ----------------------------------------------------
-        # Evidence analysis
-        # ----------------------------------------------------
 
         use_coverage=False,
         use_novelty=False,
 
-        # ----------------------------------------------------
-        # Controller
-        # ----------------------------------------------------
+
 
         gate_features=None,
         use_options_in_gate=False,
@@ -1164,9 +990,7 @@ class AdaptiveMedRAG(MedRAG):
         the evidence distinguishes the candidate answers.
         """
         start_time = time.perf_counter()
-        # ======================================================
-        # DEFAULT GATE FEATURES
-        # ======================================================
+
 
         if gate_features is None:
 
@@ -1181,9 +1005,6 @@ class AdaptiveMedRAG(MedRAG):
                 gate_features
             )
 
-        # ======================================================
-        # QUESTION PROMPT
-        # ======================================================
 
         if options is not None:
 
@@ -1204,9 +1025,7 @@ class AdaptiveMedRAG(MedRAG):
             f"{options_str}"
         )
 
-        # ======================================================
-        # STATE
-        # ======================================================
+
 
         planner = None
         coverage_analyzer = None
@@ -1264,9 +1083,7 @@ class AdaptiveMedRAG(MedRAG):
         self.total_tokens = 0
         self.llm_call_history = []
 
-        # ======================================================
-        # PLANNER
-        # ======================================================
+
 
         if use_planner:
 
@@ -1319,9 +1136,7 @@ class AdaptiveMedRAG(MedRAG):
                 f"{retrieval_need}"
             )
 
-            # --------------------------------------------------
-            # NO_RAG
-            # --------------------------------------------------
+
 
             if retrieval_need == "NO_RAG":
 
@@ -1427,9 +1242,6 @@ class AdaptiveMedRAG(MedRAG):
                     }
                 )
 
-            # --------------------------------------------------
-            # PRINT SCHEMA
-            # --------------------------------------------------
 
             print("\n[Question Plan]")
 
@@ -1471,9 +1283,7 @@ class AdaptiveMedRAG(MedRAG):
                     f"{item['importance']:.2f})"
                 )
 
-        # ======================================================
-        # INITIAL QUERY BUDGET
-        # ======================================================
+
 
         if (
             use_planner
@@ -1495,9 +1305,7 @@ class AdaptiveMedRAG(MedRAG):
             f"{query_budget}"
         )
 
-        # ======================================================
-        # COVERAGE ANALYZER
-        # ======================================================
+
 
         if use_coverage:
 
@@ -1515,9 +1323,6 @@ class AdaptiveMedRAG(MedRAG):
                 )
             )
 
-        # ======================================================
-        # EVIDENCE TRACKER
-        # ======================================================
 
         if use_novelty:
 
@@ -1527,18 +1332,61 @@ class AdaptiveMedRAG(MedRAG):
                 )
             )
 
-        # ======================================================
-        # MAIN LOOP
-        # ======================================================
 
-        # Hard safety limit
+        PRE_RETRIEVAL_CONFIDENCE_THRESHOLD = 85.0
+
+        pre_retrieval_assessment = check_stopping_gate(
+            self,
+            question,
+            context="",
+            gate_features=[
+                "confidence",
+                "answerable",
+                "discrimination"
+            ],
+            options=options,
+            use_options_in_gate=True,
+            pre_retrieval=True
+        )
+
+        pre_confidence = pre_retrieval_assessment[0]
+        pre_answerable = pre_retrieval_assessment[1]
+        pre_discrimination = pre_retrieval_assessment[2]
+        pre_reasoning = pre_retrieval_assessment[3]
+
+        print("\n--- Pre-Retrieval Confidence Check ---")
+        print(f"   Confidence: {pre_confidence}%")
+        print(f"   Answerable: {pre_answerable}")
+        print(f"   Discrimination: {pre_discrimination}")
+        print(f"   Reasoning: {pre_reasoning}")
+
+        if (
+            pre_confidence is not None
+            and pre_confidence >= PRE_RETRIEVAL_CONFIDENCE_THRESHOLD
+            and pre_answerable
+            and pre_discrimination
+        ):
+            print(
+                f"[Confidence-Adaptive] "
+                f"PRE-RETRIEVAL STOP "
+                f"(confidence={pre_confidence}%)"
+            )
+
+            stopping_iteration = 0
+            query_budget_history = []
+
+            
+        else:
+            print(
+                "[Confidence-Adaptive] "
+                "Pre-retrieval confidence insufficient. "
+                "Starting retrieval."
+            )
+
+           
         for i in range(
             max_iterations + 1
         ):
-
-            # --------------------------------------------------
-            # RETRIEVAL ROUND
-            # --------------------------------------------------
 
             if (
                 i < max_iterations
@@ -1595,9 +1443,7 @@ class AdaptiveMedRAG(MedRAG):
                         }
                     ]
 
-            # --------------------------------------------------
-            # FINAL ANSWER ROUND
-            # --------------------------------------------------
+        
 
             elif context != last_context:
 
@@ -1622,7 +1468,7 @@ class AdaptiveMedRAG(MedRAG):
 
             else:
 
-                # Emergency final answer
+                
                 messages = [
                     {
                         "role": "system",
@@ -1648,9 +1494,7 @@ class AdaptiveMedRAG(MedRAG):
 
             last_context = context
 
-            # --------------------------------------------------
-            # MODEL CALL
-            # --------------------------------------------------
+            
 
             last_content = self.generate(
                 messages,
@@ -1666,9 +1510,7 @@ class AdaptiveMedRAG(MedRAG):
                 response_message
             )
 
-            # ==================================================
-            # FINAL ANSWER
-            # ==================================================
+            
 
             if (
                 (i >= max_iterations
@@ -1772,10 +1614,7 @@ class AdaptiveMedRAG(MedRAG):
                     }
                 )
 
-            # ==================================================
-            # QUERY EXTRACTION
-            # ==================================================
-
+            
             elif "## Queries" in last_content:
 
                 messages = messages[:-1]
@@ -1840,12 +1679,10 @@ class AdaptiveMedRAG(MedRAG):
                         f"Error parsing action list: {e}"
                     )
 
-                    # Continue safely
+                    
                     continue
 
-                # ==================================================
-                # RETRIEVAL
-                # ==================================================
+                
 
                 iteration_doc_ids = []
 
@@ -1887,9 +1724,7 @@ class AdaptiveMedRAG(MedRAG):
                         print(
                             f"Retrieval Error: {e}")
                 
-                # ==================================================
-                # EVIDENCE SIGNALS
-                # ==================================================
+                
 
                 evidence_stats = {
                     "document_novelty": None,
@@ -1897,10 +1732,7 @@ class AdaptiveMedRAG(MedRAG):
                     "semantic_redundancy": None
                 }
 
-                # --------------------------------------------------
-                # Novelty
-                # --------------------------------------------------
-
+                
                 if use_novelty:
 
                     try:
@@ -1933,9 +1765,7 @@ class AdaptiveMedRAG(MedRAG):
                             f"{e}"
                         )
 
-                # --------------------------------------------------
-                # Coverage
-                # --------------------------------------------------
+                
 
                 coverage_stats = {
                     "coverage": [],
@@ -1973,8 +1803,7 @@ class AdaptiveMedRAG(MedRAG):
 
                     except TypeError:
 
-                        # Compatibility with your current
-                        # coverage module.
+                        
                         try:
 
                             coverage_stats = (
@@ -2032,9 +1861,7 @@ class AdaptiveMedRAG(MedRAG):
                             f"{float(item.get('confidence', 0.0)):.2f}"
                         )
 
-                # ==================================================
-                # STOPPING GATE
-                # ==================================================
+                
 
                 print(
                     f"\n--- Checking Gate after "
@@ -2102,9 +1929,7 @@ class AdaptiveMedRAG(MedRAG):
                 f"   [Next Query Budget]: "
                 f"{query_budget}"
             )
-        # ======================================================
-        # FINAL FAILSAFE
-        # ======================================================
+        
         latency_seconds = (
             time.perf_counter() - start_time
         )
@@ -2157,1230 +1982,588 @@ class AdaptiveMedRAG(MedRAG):
                 },
             
         )
-    
-# def adaptive_MDP_answer(
-#         self,
-#         question,
-#         options=None,
-#         k=32,
-#         rrf_k=100,
-#         save_path=None,
-#         max_iterations=4,
-#         initial_queries=2,
-#         confidence_threshold=85,
-
-#         # ----------------------------------------------------
-#         # Planner
-#         # ----------------------------------------------------
-
-#         use_planner=False,
-#         use_planner_budget=False,
-
-#         # ----------------------------------------------------
-#         # Evidence analysis
-#         # ----------------------------------------------------
-
-#         use_coverage=False,
-#         use_novelty=False,
-
-#         # ----------------------------------------------------
-#         # Controller
-#         # ----------------------------------------------------
-
-#         gate_features=None,
-#         use_options_in_gate=False,
-#         query_budget_mode="stop_rag",
-
-#         # ----------------------------------------------------
-#         # Stop-RAG controller
-#         # ----------------------------------------------------
-
-#         stop_rag=stop_rag,
-
-#         **kwargs
-#     ):
-#     """
-#     Adaptive MedRAG using a trained Stop-RAG Q-network
-#     for STOP / CONTINUE decisions.
-
-#     Main stopping logic:
+    def set_stop_rag_controller(
+        self,
+        checkpoint_path="./stop_rag_ckpt_v2/best_stop_rag_qnetwork.pt",
+        model_name="microsoft/deberta-v3-base",
+        max_length=1024,
+        device=None
+    ):
+
+        self.stop_rag_controller = (
+            TrainedStopRAGController(
+                checkpoint_path=checkpoint_path,
+                model_name=model_name,
+                max_length=max_length,
+                device=device
+            )
+        )
+
+        print(
+            "\n[Stop-RAG Controller] "
+            "Loaded."
+        )
+
+    def trained_stop_rag_decision(
+        self,
+        question,
+        options,
+        context
+    ):
+        """
+        Use the trained Q-network to decide whether
+        another retrieval round is necessary.
+        """
+
+        if not hasattr(
+            self,
+            "stop_rag_controller"
+        ):
+
+            raise RuntimeError(
+                "Stop-RAG controller has not been loaded. "
+                "Call set_stop_rag_controller() first."
+            )
+
+        decision = (
+            self.stop_rag_controller.decide(
+                question=question,
+                options=options,
+                evidence=context
+            )
+        )
+
+        print(
+            "\n[Learned Stop-RAG]"
+        )
+
+        print(
+            f"   Q(STOP): "
+            f"{decision['q_stop']:.4f}"
+        )
+
+        print(
+            f"   Q(CONTINUE): "
+            f"{decision['q_continue']:.4f}"
+        )
+
+        print(
+            f"   Margin: "
+            f"{decision['margin']:.4f}"
+        )
+
+        print(
+            f"   Decision: "
+            f"{decision['action']}"
+        )
+
+        return decision
+    def learned_stop_rag_answer(
+        self,
+        question,
+        options=None,
+        k=32,
+        rrf_k=100,
+        max_iterations=3,
+        initial_queries=2,
+        **kwargs
+    ):
+
+        start_time = time.perf_counter()
+
+        
+
+        self.llm_call_count = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+        self.llm_call_history = []
+
+        
+
+        context = ""
+
+        saved_messages = [
+            {
+                "role": "system",
+                "content":
+                    self.templates[
+                        "i_medrag_system"
+                    ]
+            }
+        ]
+
+        query_budget_history = []
+
+        q_history = []
+
+        actual_query_count = 0
+        successful_retrieval_count = 0
+        failed_retrieval_count = 0
+
+        stopping_iteration = (
+            max_iterations
+        )
+
+        
 
-#         retrieval
-#             ↓
-#         build accumulated context
-#             ↓
-#         stop_rag.should_stop(
-#             question,
-#             options,
-#             context
-#         )
-#             ↓
-#         STOP / CONTINUE
-
-#     The Stop-RAG controller uses only:
-
-#         question + options + accumulated context
-
-#     It does NOT use:
-
-#         confidence
-#         answerability
-#         discrimination
-#         coverage
-#         novelty
-
-#     Those signals may still be calculated and logged for
-#     analysis / ablation, but they do not control stopping.
-
-#     Parameters
-#     ----------
-#     stop_rag:
-#         A trained StopRAGController instance.
-
-#         Example:
-
-#             stop_rag = StopRAGController(
-#                 "./stop_rag_ckpt"
-#             )
-#     """
-
-#     # ======================================================
-#     # START TIMER
-#     # ======================================================
-
-#     start_time = time.perf_counter()
-
-#     # ======================================================
-#     # STOP-RAG CONTROLLER CHECK
-#     # ======================================================
-
-#     if stop_rag is None:
-
-#         raise ValueError(
-#             "stop_rag must be provided. "
-#             "Initialize a trained StopRAGController first."
-#         )
-
-#     # ======================================================
-#     # QUESTION PROMPT
-#     # ======================================================
-
-#     if options is not None:
-
-#         options_str = "\n".join(
-#             [
-#                 key + ". " + options[key]
-#                 for key in sorted(options.keys())
-#             ]
-#         )
-
-#     else:
-
-#         options_str = ""
-
-#     QUESTION_PROMPT = (
-#         f"Here is the question:\n"
-#         f"{question}\n\n"
-#         f"{options_str}"
-#     )
-
-#     # ======================================================
-#     # STATE
-#     # ======================================================
-
-#     planner = None
-#     coverage_analyzer = None
-#     evidence_tracker = None
-
-#     question_plan = None
-
-#     observed_entities = []
-#     constraints = []
-#     hypotheses = []
-#     relationships = []
-#     information_needs = []
-
-#     context = ""
-
-#     last_context = None
-
-#     saved_messages = [
-#         {
-#             "role": "system",
-#             "content":
-#                 self.templates[
-#                     "i_medrag_system"
-#                 ]
-#         }
-#     ]
-
-#     stop_flag = False
-
-#     # These are retained only for logging / compatibility.
-#     confidence = 0.0
-#     answerable = False
-#     discrimination_sufficient = False
-#     gate_reasoning = ""
-
-#     stopping_iteration = max_iterations
-
-#     coverage_history = []
-#     query_budget_history = []
-#     confidence_history = []
-#     novelty_history = []
-#     discrimination_history = []
-#     gate_reasoning_history = []
-
-#     # ------------------------------------------------------
-#     # Stop-RAG diagnostics
-#     # ------------------------------------------------------
-
-#     q_value_history = []
-#     stop_margin_history = []
-#     stop_decision_history = []
-
-#     actual_query_count = 0
-#     successful_retrieval_count = 0
-#     failed_retrieval_count = 0
-
-#     # ======================================================
-#     # RESET LLM METRICS
-#     # ======================================================
-
-#     self.llm_call_count = 0
-#     self.prompt_tokens = 0
-#     self.completion_tokens = 0
-#     self.total_tokens = 0
-#     self.llm_call_history = []
-
-#     # ======================================================
-#     # PLANNER
-#     # ======================================================
-
-#     if use_planner:
-
-#         planner = QuestionPlanner(
-#             self
-#         )
-
-#         question_plan = planner.plan(
-#             question
-#         )
-
-#         observed_entities = (
-#             question_plan[
-#                 "observed_entities"
-#             ]
-#         )
-
-#         constraints = (
-#             question_plan[
-#                 "constraints"
-#             ]
-#         )
-
-#         hypotheses = (
-#             question_plan[
-#                 "hypotheses"
-#             ]
-#         )
-
-#         relationships = (
-#             question_plan[
-#                 "relationships_to_establish"
-#             ]
-#         )
-
-#         information_needs = (
-#             question_plan[
-#                 "information_needs"
-#             ]
-#         )
-
-#         retrieval_need = (
-#             question_plan[
-#                 "retrieval_need"
-#             ]
-#         )
-
-#         print(
-#             f"\n[Planner Retrieval Need]: "
-#             f"{retrieval_need}"
-#         )
-
-#         # --------------------------------------------------
-#         # NO_RAG
-#         # --------------------------------------------------
-
-#         if retrieval_need == "NO_RAG":
-
-#             print(
-#                 "\n[Planner Decision] "
-#                 "NO_RAG -> skipping retrieval."
-#             )
-
-#             # Direct answer path
-#             messages = [
-#                 {
-#                     "role": "system",
-#                     "content":
-#                         self.templates[
-#                             "i_medrag_system"
-#                         ]
-#                 },
-#                 {
-#                     "role": "user",
-#                     "content":
-#                         f"{QUESTION_PROMPT}\n\n"
-#                         f"{self.templates['follow_up_answer']}"
-#                 }
-#             ]
-
-#             saved_messages.extend(
-#                 messages[1:]
-#             )
-
-#             answer_response = self.generate(
-#                 messages,
-#                 **kwargs
-#             )
-
-#             response_message = {
-#                 "role": "assistant",
-#                 "content": answer_response
-#             }
-
-#             saved_messages.append(
-#                 response_message
-#             )
-
-#             messages.append(
-#                 response_message
-#             )
-
-#             # Final JSON extraction
-#             messages.append(
-#                 {
-#                     "role": "user",
-#                     "content": (
-#                         "Return ONLY valid JSON. "
-#                         'Return exactly this format: {"answer":""}. '
-#                         "The answer must be one of A, B, C, D, E, or F. "
-#                         "Do not include explanation."
-#                     )
-#                 }
-#             )
-
-#             saved_messages.append(
-#                 messages[-1]
-#             )
-
-#             final_answer = self.generate(
-#                 messages,
-#                 **kwargs
-#             )
-
-#             saved_messages.append(
-#                 {
-#                     "role": "assistant",
-#                     "content": final_answer
-#                 }
-#             )
-
-#             return (
-#                 final_answer,
-#                 saved_messages,
-#                 0,
-#                 0.0,
-#                 [],
-#                 0,
-#                 0,
-#                 0,
-#                 [],
-#                 [],
-#                 {
-#                     "use_planner":
-#                         use_planner,
-#                     "use_planner_budget":
-#                         use_planner_budget,
-#                     "use_coverage":
-#                         use_coverage,
-#                     "use_novelty":
-#                         use_novelty,
-#                     "use_options_in_gate":
-#                         use_options_in_gate,
-#                     "query_budget_mode":
-#                         query_budget_mode,
-#                     "gate_features":
-#                         gate_features,
-
-#                     "confidence_history":
-#                         confidence_history,
-
-#                     "novelty_history":
-#                         novelty_history,
-
-#                     "discrimination_history":
-#                         discrimination_history,
-
-#                     "query_budget_history":
-#                         query_budget_history,
-
-#                     "q_value_history":
-#                         q_value_history,
-
-#                     "stop_margin_history":
-#                         stop_margin_history,
-
-#                     "stop_decision_history":
-#                         stop_decision_history,
-
-#                     "llm_calls":
-#                         self.llm_call_count,
-
-#                     "prompt_tokens":
-#                         self.prompt_tokens,
-
-#                     "completion_tokens":
-#                         self.completion_tokens,
-
-#                     "total_tokens":
-#                         self.total_tokens,
-
-#                     "latency_seconds":
-#                         (
-#                             time.perf_counter()
-#                             - start_time
-#                         ),
-#                 }
-#             )
-
-#         # --------------------------------------------------
-#         # PRINT PLAN
-#         # --------------------------------------------------
-
-#         print(
-#             "\n[Question Plan]"
-#         )
-
-#         print(
-#             f"   Intent: "
-#             f"{question_plan['intent']}"
-#         )
-
-#         print(
-#             f"   Question Target: "
-#             f"{question_plan['question_target']}"
-#         )
-
-#         print(
-#             f"   Retrieval Need: "
-#             f"{retrieval_need}"
-#         )
-
-#         print(
-#             f"   Complexity: "
-#             f"{question_plan['complexity']:.2f}"
-#         )
-
-#         print(
-#             f"   Planner Initial Budget: "
-#             f"{question_plan['initial_query_budget']}"
-#         )
-
-#         print(
-#             "\n   Information Needs:"
-#         )
-
-#         for item in information_needs:
-
-#             print(
-#                 f"      {item['id']}: "
-#                 f"{item['description']} "
-#                 f"(importance="
-#                 f"{item['importance']:.2f})"
-#             )
-
-#     # ======================================================
-#     # INITIAL QUERY BUDGET
-#     # ======================================================
-
-#     if (
-#         use_planner
-#         and use_planner_budget
-#     ):
-
-#         query_budget = (
-#             question_plan[
-#                 "initial_query_budget"
-#             ]
-#         )
-
-#     else:
-
-#         query_budget = initial_queries
-
-#     print(
-#         f"\n   [Initial Query Budget]: "
-#         f"{query_budget}"
-#     )
-
-#     # ======================================================
-#     # COVERAGE ANALYZER
-#     # ======================================================
-
-#     if use_coverage:
-
-#         if not use_planner:
-
-#             raise ValueError(
-#                 "use_coverage=True requires "
-#                 "use_planner=True because "
-#                 "coverage uses information needs."
-#             )
-
-#         coverage_analyzer = (
-#             EvidenceCoverageAnalyzer(
-#                 self
-#             )
-#         )
-
-#     # ======================================================
-#     # EVIDENCE TRACKER
-#     # ======================================================
-
-#     if use_novelty:
-
-#         evidence_tracker = (
-#             EvidenceTracker(
-#                 self.retrieval_system
-#             )
-#         )
-
-#     # ======================================================
-#     # MAIN LOOP
-#     # ======================================================
-
-#     for i in range(
-#         max_iterations + 1
-#     ):
-
-#         # ==================================================
-#         # RETRIEVAL ROUND
-#         # ==================================================
-
-#         if (
-#             i < max_iterations
-#             and not stop_flag
-#         ):
-
-#             query_budget_history.append(
-#                 query_budget
-#             )
-
-#             print(
-#                 f"\n   [Query Budget]: "
-#                 f"{query_budget}"
-#             )
-
-#             if not context:
-
-#                 messages = [
-#                     {
-#                         "role": "system",
-#                         "content":
-#                             self.templates[
-#                                 "i_medrag_system"
-#                             ]
-#                     },
-#                     {
-#                         "role": "user",
-#                         "content":
-#                             (
-#                                 f"{QUESTION_PROMPT}\n\n"
-#                                 f"{self.templates['follow_up_ask'].format(query_budget)}"
-#                             )
-#                     }
-#                 ]
-
-#             else:
-
-#                 messages = [
-#                     {
-#                         "role": "system",
-#                         "content":
-#                             self.templates[
-#                                 "i_medrag_system"
-#                             ]
-#                     },
-#                     {
-#                         "role": "user",
-#                         "content":
-#                             (
-#                                 f"{context}\n\n"
-#                                 f"{QUESTION_PROMPT}\n\n"
-#                                 f"{self.templates['follow_up_ask'].format(query_budget)}"
-#                             )
-#                     }
-#                 ]
-
-#         # ==================================================
-#         # FINAL ANSWER ROUND
-#         # ==================================================
-
-#         else:
-
-#             messages = [
-#                 {
-#                     "role": "system",
-#                     "content":
-#                         self.templates[
-#                             "i_medrag_system"
-#                         ]
-#                 },
-#                 {
-#                     "role": "user",
-#                     "content":
-#                         (
-#                             f"{context}\n\n"
-#                             f"{QUESTION_PROMPT}\n\n"
-#                             f"{self.templates['follow_up_answer']}"
-#                         )
-#                 }
-#             ]
-
-#         saved_messages.append(
-#             messages[-1]
-#         )
-
-#         last_context = context
-
-#         # ==================================================
-#         # MODEL CALL
-#         # ==================================================
-
-#         last_content = self.generate(
-#             messages,
-#             **kwargs
-#         )
-
-#         response_message = {
-#             "role": "assistant",
-#             "content": last_content
-#         }
-
-#         saved_messages.append(
-#             response_message
-#         )
-
-#         # ==================================================
-#         # FINAL ANSWER
-#         # ==================================================
-
-#         if (
-#             (
-#                 i >= max_iterations
-#                 or stop_flag
-#             )
-#             and
-#             (
-#                 "## Answer" in last_content
-#                 or
-#                 "answer is"
-#                 in last_content.lower()
-#             )
-#         ):
-
-#             messages.append(
-#                 response_message
-#             )
-
-#             messages.append(
-#                 {
-#                     "role": "user",
-#                     "content": (
-#                         "Return ONLY valid JSON. "
-#                         'Return exactly this format: {"answer":""} '
-#                         "where the answer must be one of A, B, C, D, E, or F. "
-#                         "Do not use single quotes. "
-#                         "Do not include explanation."
-#                     )
-#                 }
-#             )
-
-#             saved_messages.append(
-#                 messages[-1]
-#             )
-
-#             answer_content = self.generate(
-#                 messages,
-#                 **kwargs
-#             )
-
-#             messages.append(
-#                 {
-#                     "role": "assistant",
-#                     "content":
-#                         answer_content
-#                 }
-#             )
-
-#             saved_messages.append(
-#                 messages[-1]
-#             )
-
-#             latency_seconds = (
-#                 time.perf_counter()
-#                 - start_time
-#             )
-
-#             return (
-#                 messages[-1]["content"],
-#                 saved_messages,
-#                 stopping_iteration,
-#                 confidence,
-#                 query_budget_history,
-#                 actual_query_count,
-#                 successful_retrieval_count,
-#                 failed_retrieval_count,
-#                 evidence_tracker.history
-#                 if evidence_tracker
-#                 else [],
-#                 coverage_history,
-#                 {
-#                     "use_planner":
-#                         use_planner,
-
-#                     "use_planner_budget":
-#                         use_planner_budget,
-
-#                     "use_coverage":
-#                         use_coverage,
-
-#                     "use_novelty":
-#                         use_novelty,
-
-#                     "use_options_in_gate":
-#                         use_options_in_gate,
-
-#                     "query_budget_mode":
-#                         query_budget_mode,
-
-#                     "gate_features":
-#                         gate_features,
-
-#                     "confidence_history":
-#                         confidence_history,
-
-#                     "novelty_history":
-#                         novelty_history,
-
-#                     "discrimination_history":
-#                         discrimination_history,
-
-#                     "gate_reasoning_history":
-#                         gate_reasoning_history,
-
-#                     "query_budget_history":
-#                         query_budget_history,
-
-#                     # --------------------------------------
-#                     # Stop-RAG information
-#                     # --------------------------------------
-
-#                     "q_value_history":
-#                         q_value_history,
-
-#                     "stop_margin_history":
-#                         stop_margin_history,
-
-#                     "stop_decision_history":
-#                         stop_decision_history,
-
-#                     # --------------------------------------
-#                     # Metrics
-#                     # --------------------------------------
-
-#                     "llm_calls":
-#                         self.llm_call_count,
-
-#                     "prompt_tokens":
-#                         self.prompt_tokens,
-
-#                     "completion_tokens":
-#                         self.completion_tokens,
-
-#                     "total_tokens":
-#                         self.total_tokens,
-
-#                     "latency_seconds":
-#                         latency_seconds,
-#                 }
-#             )
-
-#         # ==================================================
-#         # QUERY EXTRACTION
-#         # ==================================================
-
-#         elif "## Queries" in last_content:
-
-#             messages = messages[:-1]
-
-#             try:
-
-#                 parser_prompt = (
-#                     "Parse the following passage and extract "
-#                     "the queries as a list.\n\n"
-#                     f"{last_content}\n\n"
-#                     "Do not merge or split queries. "
-#                     "Return ONLY valid JSON using exactly:\n"
-#                     '{"output":["query 1","query 2"]}'
-#                 )
-
-#                 action_response = self.generate(
-#                     [
-#                         {
-#                             "role": "user",
-#                             "content":
-#                                 parser_prompt
-#                         }
-#                     ],
-#                     **kwargs
-#                 )
-
-#                 parsed = parse_json_response(
-#                     action_response
-#                 )
-
-#                 action_list = parsed.get(
-#                     "output",
-#                     []
-#                 )
-
-#                 if not isinstance(
-#                     action_list,
-#                     list
-#                 ):
-
-#                     raise ValueError(
-#                         "Parsed query output is not a list."
-#                     )
-
-#                 action_list = [
-#                     str(q).strip()
-#                     for q in action_list
-#                     if str(q).strip()
-#                 ]
-
-#                 actual_query_count += (
-#                     len(action_list)
-#                 )
-
-#                 print(
-#                     f"   [Actual Queries Generated]: "
-#                     f"{len(action_list)}"
-#                 )
-
-#             except Exception as e:
-
-#                 print(
-#                     f"Error parsing action list: {e}"
-#                 )
-
-#                 continue
-
-#             # ==================================================
-#             # RETRIEVAL
-#             # ==================================================
-
-#             iteration_doc_ids = []
-
-#             for q in action_list:
-
-#                 try:
-
-#                     (
-#                         rag_result,
-#                         retrieved_snippets,
-#                         scores
-#                     ) = self.medrag_answer(
-#                         q,
-#                         k=k,
-#                         rrf_k=rrf_k,
-#                         **kwargs
-#                     )
-
-#                     successful_retrieval_count += 1
-
-#                     for doc in retrieved_snippets:
-
-#                         if "id" in doc:
-
-#                             iteration_doc_ids.append(
-#                                 doc["id"]
-#                             )
-
-#                     context += (
-#                         f"\n\nQuery: {q}\n"
-#                         f"Answer: {rag_result}"
-#                     )
-
-#                     context = context.strip()
-
-#                 except Exception as e:
-
-#                     failed_retrieval_count += 1
-
-#                     print(
-#                         f"Retrieval Error: {e}"
-#                     )
-
-#             # ==================================================
-#             # EVIDENCE SIGNALS
-#             # ==================================================
-
-#             evidence_stats = {
-#                 "document_novelty": None,
-#                 "semantic_novelty": None,
-#                 "semantic_redundancy": None
-#             }
-
-#             # --------------------------------------------------
-#             # Novelty
-#             # --------------------------------------------------
-
-#             if use_novelty:
-
-#                 try:
-
-#                     evidence_stats = (
-#                         evidence_tracker.update(
-#                             iteration_doc_ids
-#                         )
-#                     )
-
-#                     print(
-#                         f"   [Document Novelty]: "
-#                         f"{evidence_stats['document_novelty']}"
-#                     )
-
-#                     print(
-#                         f"   [Semantic Novelty]: "
-#                         f"{evidence_stats['semantic_novelty']}"
-#                     )
-
-#                     print(
-#                         f"   [Semantic Redundancy]: "
-#                         f"{evidence_stats['semantic_redundancy']}"
-#                     )
-
-#                 except Exception as e:
-
-#                     print(
-#                         f"[Evidence Tracker Error]: "
-#                         f"{e}"
-#                     )
-
-#             # --------------------------------------------------
-#             # Coverage
-#             # --------------------------------------------------
-
-#             coverage_stats = {
-#                 "coverage": [],
-#                 "constraint_coverage": [],
-#                 "core_coverage": 0.0,
-#                 "weighted_coverage": 0.0,
-#                 "reasoning": ""
-#             }
-
-#             if use_coverage:
-
-#                 try:
-
-#                     coverage_stats = (
-#                         coverage_analyzer.analyze(
-#                             question=question,
-#                             question_target=(
-#                                 question_plan.get(
-#                                     "question_target",
-#                                     ""
-#                                 )
-#                             ),
-#                             information_needs=(
-#                                 information_needs
-#                             ),
-#                             constraints=(
-#                                 constraints
-#                             ),
-#                             relationships=(
-#                                 relationships
-#                             ),
-#                             context=context
-#                         )
-#                     )
-
-#                 except TypeError:
-
-#                     try:
-
-#                         coverage_stats = (
-#                             coverage_analyzer.analyze(
-#                                 question=question,
-#                                 core_requirements=(
-#                                     information_needs
-#                                 ),
-#                                 supporting_constraints=(
-#                                     constraints
-#                                 ),
-#                                 context=context
-#                             )
-#                         )
-
-#                     except Exception as e:
-
-#                         print(
-#                             f"[Coverage Error]: "
-#                             f"{e}"
-#                         )
-
-#                 except Exception as e:
-
-#                     print(
-#                         f"[Coverage Error]: "
-#                         f"{e}"
-#                     )
-
-#                 coverage_history.append(
-#                     coverage_stats
-#                 )
-
-#                 print(
-#                     f"\n   [Core Coverage]: "
-#                     f"{coverage_stats.get('core_coverage', 0.0):.2f}"
-#                 )
-
-#                 print(
-#                     f"   [Weighted Coverage]: "
-#                     f"{coverage_stats.get('weighted_coverage', 0.0):.2f}"
-#                 )
-
-#                 print(
-#                     "   [Information Need Coverage]:"
-#                 )
-
-#                 for item in coverage_stats.get(
-#                     "coverage",
-#                     []
-#                 ):
-
-#                     print(
-#                         f"      "
-#                         f"{item.get('id', '')} | "
-#                         f"{item.get('status', '')} | "
-#                         f"{float(item.get('confidence', 0.0)):.2f}"
-#                     )
-
-#             # ==================================================
-#             # STOP-RAG DECISION
-#             # ==================================================
-
-#             print(
-#                 f"\n--- Stop-RAG Decision "
-#                 f"after Iteration {i + 1} ---"
-#             )
-
-#             stop_flag = stop_rag.should_stop(
-#                 question,
-#                 options,
-#                 context
-#             )
-
-#             # --------------------------------------------------
-#             # Get Q-values for logging
-#             # --------------------------------------------------
-
-#             try:
-
-#                 q_stop, q_continue = (
-#                     stop_rag.q_values(
-#                         question,
-#                         options,
-#                         context
-#                     )
-#                 )
-
-#                 margin = (
-#                     q_stop
-#                     - q_continue
-#                 )
-
-#                 q_value_history.append(
-#                     {
-#                         "iteration":
-#                             i + 1,
-#                         "q_stop":
-#                             q_stop,
-#                         "q_continue":
-#                             q_continue,
-#                     }
-#                 )
-
-#                 stop_margin_history.append(
-#                     margin
-#                 )
-
-#                 stop_decision_history.append(
-#                     stop_flag
-#                 )
-
-#                 print(
-#                     f"   [Q(STOP)]: "
-#                     f"{q_stop:.4f}"
-#                 )
-
-#                 print(
-#                     f"   [Q(CONTINUE)]: "
-#                     f"{q_continue:.4f}"
-#                 )
-
-#                 print(
-#                     f"   [Q Margin]: "
-#                     f"{margin:.4f}"
-#                 )
-
-#                 print(
-#                     f"   [Stop-RAG Decision]: "
-#                     f"{'STOP' if stop_flag else 'CONTINUE'}"
-#                 )
-
-#             except Exception as e:
-
-#                 print(
-#                     f"   [Stop-RAG Logging Error]: "
-#                     f"{e}"
-#                 )
-
-#             # --------------------------------------------------
-#             # Stopping iteration
-#             # --------------------------------------------------
-
-#             if stop_flag:
-
-#                 stopping_iteration = (
-#                     i + 1
-#                 )
-
-#                 print(
-#                     f"   [Stopping Iteration]: "
-#                     f"{stopping_iteration}"
-#                 )
-
-#             # ==================================================
-#             # OPTIONAL LEGACY GATE LOGGING
-#             # ==================================================
-#             #
-#             # IMPORTANT:
-#             # This section is intentionally NOT used to control
-#             # STOP / CONTINUE.
-#             #
-#             # Leave it disabled unless you want to collect
-#             # confidence / answerability / discrimination
-#             # for comparison with your old controller.
-#             #
-#             # ==================================================
-
-#     # ======================================================
-#     # FINAL FAILSAFE
-#     # ======================================================
-
-#     latency_seconds = (
-#         time.perf_counter()
-#         - start_time
-#     )
-
-#     return (
-#         messages[-1]["content"],
-#         saved_messages,
-#         stopping_iteration,
-#         confidence,
-#         query_budget_history,
-#         actual_query_count,
-#         successful_retrieval_count,
-#         failed_retrieval_count,
-#         evidence_tracker.history
-#         if evidence_tracker
-#         else [],
-#         coverage_history,
-#         {
-#             "use_planner":
-#                 use_planner,
-
-#             "use_planner_budget":
-#                 use_planner_budget,
-
-#             "use_coverage":
-#                 use_coverage,
-
-#             "use_novelty":
-#                 use_novelty,
-
-#             "use_options_in_gate":
-#                 use_options_in_gate,
-
-#             "query_budget_mode":
-#                 query_budget_mode,
-
-#             "gate_features":
-#                 gate_features,
-
-#             "confidence_history":
-#                 confidence_history,
-
-#             "novelty_history":
-#                 novelty_history,
-
-#             "discrimination_history":
-#                 discrimination_history,
-
-#             "gate_reasoning_history":
-#                 gate_reasoning_history,
-
-#             "query_budget_history":
-#                 query_budget_history,
-
-#             # ----------------------------------------------
-#             # Stop-RAG
-#             # ----------------------------------------------
-
-#             "q_value_history":
-#                 q_value_history,
-
-#             "stop_margin_history":
-#                 stop_margin_history,
-
-#             "stop_decision_history":
-#                 stop_decision_history,
-
-#             # ----------------------------------------------
-#             # Metrics
-#             # ----------------------------------------------
-
-#             "llm_calls":
-#                 self.llm_call_count,
-
-#             "prompt_tokens":
-#                 self.prompt_tokens,
-
-#             "completion_tokens":
-#                 self.completion_tokens,
-
-#             "total_tokens":
-#                 self.total_tokens,
-
-#             "latency_seconds":
-#                 latency_seconds,
-#         },
-#     )
+        query_budget = initial_queries
+
+        
+
+        if options is not None:
+
+            options_str = "\n".join(
+                [
+                    f"{key}. {options[key]}"
+                    for key in sorted(
+                        options.keys()
+                    )
+                ]
+            )
+
+        else:
+
+            options_str = ""
+
+        QUESTION_PROMPT = (
+            f"Here is the question:\n"
+            f"{question}\n\n"
+            f"{options_str}"
+        )
+
+        
+
+        for i in range(max_iterations + 1):
+
+            print("\n")
+            print("=" * 80)
+            print(
+                f"LEARNED STOP-RAG STATE {i}"
+            )
+            print("=" * 80)
+
+            print(
+                f"[Current evidence chars]: "
+                f"{len(context)}"
+            )
+
+            
+
+            decision = self.trained_stop_rag_decision(
+                question=question,
+                options=options,
+                context=context
+            )
+
+            q_history.append(decision)
+
+            print(
+                f"\n[Learned Stop-RAG]"
+            )
+            print(
+                f"   Q(STOP): "
+                f"{decision['q_stop']:.4f}"
+            )
+            print(
+                f"   Q(CONTINUE): "
+                f"{decision['q_continue']:.4f}"
+            )
+            print(
+                f"   Margin: "
+                f"{decision['margin']:.4f}"
+            )
+            print(
+                f"   Margin threshold: "
+                f"{decision.get('margin_threshold', 0.0):.4f}"
+            )
+            print(
+                f"   Decision: "
+                f"{decision['action']}"
+            )
+
+            
+
+            if decision["action"] == "STOP":
+
+                print(
+                    "[Stop-RAG] STOP selected."
+                )
+
+                stopping_iteration = i
+
+                break
+
+            
+
+            if i >= max_iterations:
+
+                print(
+                    "[Stop-RAG] Maximum retrieval "
+                    "iterations reached."
+                )
+
+                stopping_iteration = i
+
+                break
+
+            
+
+            print(
+                "[Stop-RAG] CONTINUE selected."
+            )
+
+            query_budget = initial_queries
+
+            query_budget_history.append(
+                query_budget
+            )
+
+            print(
+                f"[Query Budget]: "
+                f"{query_budget}"
+            )
+
+            
+
+            if not context:
+
+                user_content = (
+                    f"{QUESTION_PROMPT}\n\n"
+                    f"{self.templates['follow_up_ask'].format(query_budget)}"
+                )
+
+            else:
+
+                user_content = (
+                    f"{context}\n\n"
+                    f"{QUESTION_PROMPT}\n\n"
+                    f"{self.templates['follow_up_ask'].format(query_budget)}"
+                )
+
+            messages = [
+                {
+                    "role": "system",
+                    "content":
+                        self.templates[
+                            "i_medrag_system"
+                        ]
+                },
+                {
+                    "role": "user",
+                    "content": user_content
+                }
+            ]
+
+            saved_messages.append(
+                messages[-1]
+            )
+
+            
+
+            query_response = self.generate(
+                messages,
+                **kwargs
+            )
+
+            saved_messages.append(
+                {
+                    "role": "assistant",
+                    "content": query_response
+                }
+            )
+
+            
+
+            queries = []
+
+            for line in query_response.splitlines():
+
+                line = line.strip()
+
+                
+                match = re.match(
+                    r"^##\s*Query\s*\d+\s*:\s*(.+?)\s*$",
+                    line,
+                    flags=re.IGNORECASE
+                )
+
+                if match:
+
+                    query = match.group(1).strip()
+
+                    if query:
+                        queries.append(query)
+
+            
+
+            if not queries:
+
+                fallback_patterns = [
+                    r"^\s*Query\s*\d+\s*:\s*(.+?)\s*$",
+                    r"^\s*\d+\.\s*(.+?)\s*$",
+                    r"^\s*-\s*(.+?)\s*$",
+                ]
+
+                for pattern in fallback_patterns:
+
+                    matches = re.findall(
+                        pattern,
+                        query_response,
+                        flags=re.IGNORECASE |
+                              re.MULTILINE
+                    )
+
+                    for match in matches:
+
+                        query = match.strip()
+
+                        if query:
+                            queries.append(query)
+
+                    if queries:
+                        break
+
+            
+
+            queries = queries[:query_budget]
+
+            print(
+                f"[Queries generated]: "
+                f"{len(queries)}"
+            )
+
+           
+
+            if not queries:
+
+                print(
+                    "\n[ERROR] Query generation returned "
+                    "zero queries."
+                )
+
+                print(
+                    "\n[Raw query response]:"
+                )
+
+                print(query_response)
+
+                raise RuntimeError(
+                    "Stop-RAG decided CONTINUE, "
+                    "but no retrieval queries were generated."
+                )
+
+
+            for query in queries:
+
+                actual_query_count += 1
+
+                print(
+                    f"\n[Retrieving query "
+                    f"{actual_query_count}]:"
+                )
+
+                print(
+                    f"   {query}"
+                )
+
+                try:
+
+                   
+                    rag_result, retrieved_snippets, scores = (
+                        self.medrag_answer(
+                            query,
+                            k=k,
+                            rrf_k=rrf_k
+                        )
+                    )
+
+                    if rag_result:
+
+                        successful_retrieval_count += 1
+
+                        
+                        context += (
+                            f"\n\n"
+                            f"Query: {query}\n"
+                            f"Answer: {rag_result}"
+                        )
+
+                    else:
+
+                        failed_retrieval_count += 1
+
+                        print(
+                            "[Retrieval] No result returned."
+                        )
+
+                except Exception as e:
+
+                    failed_retrieval_count += 1
+
+                    print(
+                        f"[Retrieval error]: {e}"
+                    )
+
+            
+
+            context = context.strip()
+
+            print(
+                f"\n[Evidence chars after retrieval]: "
+                f"{len(context)}"
+            )
+
+            print(
+                f"[Successful retrievals]: "
+                f"{successful_retrieval_count}"
+            )
+
+            print(
+                f"[Failed retrievals]: "
+                f"{failed_retrieval_count}"
+            )
+
+
+        
+
+        final_messages = [
+            {
+                "role": "system",
+                "content":
+                    self.templates[
+                        "i_medrag_system"
+                    ]
+            },
+            {
+                "role": "user",
+                "content":
+                    (
+                        f"{context}\n\n"
+                        f"{QUESTION_PROMPT}\n\n"
+                        f"{self.templates['follow_up_answer']}"
+                    )
+            }
+        ]
+
+        saved_messages.append(
+            final_messages[-1]
+        )
+
+        answer_response = self.generate(
+            final_messages,
+            **kwargs
+        )
+
+        saved_messages.append(
+            {
+                "role": "assistant",
+                "content":
+                    answer_response
+            }
+        )
+
+        
+
+        final_messages.append(
+            {
+                "role": "assistant",
+                "content":
+                    answer_response
+            }
+        )
+
+        final_messages.append(
+            {
+                "role": "user",
+                "content":
+                    (
+                        "Return ONLY valid JSON. "
+                        'Return exactly this format: {"answer":""}. '
+                        "The answer must be one of A, B, C, D, E, or F. "
+                        "Do not include explanation."
+                    )
+            }
+        )
+
+        saved_messages.append(
+            final_messages[-1]
+        )
+
+        final_answer = self.generate(
+            final_messages,
+            **kwargs
+        )
+
+        saved_messages.append(
+            {
+                "role": "assistant",
+                "content":
+                    final_answer
+            }
+        )
+
+        latency_seconds = (
+            time.perf_counter()
+            - start_time
+        )
+
+        
+
+        controller_config = {
+
+            "controller":
+                "trained_stop_rag",
+
+            "model":
+                "microsoft/deberta-v3-base",
+
+            "checkpoint":
+                "./stop_rag_ckpt_v2/best_stop_rag_qnetwork.pt",
+
+            "uses_llm_confidence":
+                False,
+
+            "uses_answerability":
+                False,
+
+            "uses_discrimination":
+                False,
+
+            "uses_retrieval_scores":
+                False,
+
+            "q_history":
+                q_history,
+
+            "llm_calls":
+                self.llm_call_count,
+
+            "prompt_tokens":
+                self.prompt_tokens,
+
+            "completion_tokens":
+                self.completion_tokens,
+
+            "total_tokens":
+                self.total_tokens,
+
+            "latency_seconds":
+                latency_seconds
+        }
+
+        return (
+            final_answer,
+            saved_messages,
+            stopping_iteration,
+            query_budget_history,
+            actual_query_count,
+            successful_retrieval_count,
+            failed_retrieval_count,
+            q_history,
+            controller_config
+        )
+
 
 
     def collect_full_trajectory(
@@ -3411,9 +2594,7 @@ class AdaptiveMedRAG(MedRAG):
 
         start_time = time.perf_counter()
 
-        # ========================================================
-        # RESET PER-QUESTION METRICS
-        # ========================================================
+        
 
         self.llm_call_count = 0
         self.prompt_tokens = 0
@@ -3421,17 +2602,13 @@ class AdaptiveMedRAG(MedRAG):
         self.total_tokens = 0
         self.llm_call_history = []
 
-        # ========================================================
-        # RESET EVIDENCE TRACKER
-        # ========================================================
+        
 
         evidence_tracker = EvidenceTracker(
             self.retrieval_system
         )
 
-        # ========================================================
-        # QUESTION PROMPT
-        # ========================================================
+        
 
         if options is not None:
 
@@ -3453,9 +2630,7 @@ class AdaptiveMedRAG(MedRAG):
         )
         
         
-        # ========================================================
-        # STATE
-        # ========================================================
+        
 
         context = ""
 
@@ -3477,9 +2652,7 @@ class AdaptiveMedRAG(MedRAG):
         accumulated_documents = []
 
 
-        # ========================================================
-        # FIXED ITERATIVE TRAJECTORY
-        # ========================================================
+        
         s0_assessment = check_stopping_gate(
             self,
             question,
@@ -3554,15 +2727,11 @@ class AdaptiveMedRAG(MedRAG):
             )
             print("=" * 90)
 
-            # ----------------------------------------------------
-            # ALWAYS ASK FOR EXACTLY n_queries
-            # ----------------------------------------------------
+            
 
             query_budget = n_queries
 
-            # ----------------------------------------------------
-            # BUILD QUERY-GENERATION PROMPT
-            # ----------------------------------------------------
+            
 
             if not context:
 
@@ -3609,10 +2778,7 @@ class AdaptiveMedRAG(MedRAG):
                 messages[-1]
             )
 
-            # ----------------------------------------------------
-            # GENERATE FOLLOW-UP QUERY TEXT
-            # ----------------------------------------------------
-
+            
             query_generation_response = self.generate(
                 messages,
                 **kwargs
@@ -3627,9 +2793,7 @@ class AdaptiveMedRAG(MedRAG):
                 query_generation_message
             )
 
-            # ----------------------------------------------------
-            # PARSE QUERIES
-            # ----------------------------------------------------
+           
 
             parser_prompt = (
                 "Parse the following passage and extract "
@@ -3683,9 +2847,7 @@ class AdaptiveMedRAG(MedRAG):
 
                 action_list = []
 
-            # ----------------------------------------------------
-            # FORCE EXACTLY n_queries
-            # ----------------------------------------------------
+            
 
             action_list = action_list[
                 :n_queries
@@ -3704,9 +2866,7 @@ class AdaptiveMedRAG(MedRAG):
                 actual_generated_queries
             )
 
-            # ====================================================
-            # RETRIEVAL
-            # ====================================================
+            
 
             iteration_documents = []
 
@@ -3738,9 +2898,7 @@ class AdaptiveMedRAG(MedRAG):
                         "retrieved_documents": []
                     }
 
-                    # --------------------------------------------
-                    # SAVE EVERY RETRIEVED DOCUMENT
-                    # --------------------------------------------
+                    
 
                     for j, doc in enumerate(
                         retrieved_snippets
@@ -3774,9 +2932,7 @@ class AdaptiveMedRAG(MedRAG):
                         query_record
                     )
 
-                    # --------------------------------------------
-                    # SAME CONTEXT BEHAVIOR AS adaptive_answer()
-                    # --------------------------------------------
+                    
 
                     context += (
                         f"\n\nQuery: {query}\n"
@@ -3798,9 +2954,7 @@ class AdaptiveMedRAG(MedRAG):
                     print(
                         f"[Retrieval Error]: {e}"
                     )
-            # ========================================================
-            # ACCUMULATE DOCUMENTS
-            # ========================================================
+            
 
             accumulated_documents.extend(
                 iteration_documents
@@ -3823,7 +2977,7 @@ class AdaptiveMedRAG(MedRAG):
 
                 else:
 
-                    # Fallback for documents without an ID
+                    
                     fallback_id = str(
                         hash(
                             doc.get(
@@ -3841,9 +2995,7 @@ class AdaptiveMedRAG(MedRAG):
                 deduplicated_documents.values()
             )    
 
-            # ====================================================
-            # EVIDENCE / NOVELTY
-            # ====================================================
+            
 
             try:
 
@@ -3888,15 +3040,13 @@ class AdaptiveMedRAG(MedRAG):
                         False
                 }
 
-            # ====================================================
-            # STATE METRICS
-            # ====================================================
+           
 
             iteration_latency = (
                 time.perf_counter()
                 - iteration_start
             )
-            # ====================================================
+            
             current_llm_calls = self.llm_call_count
             current_prompt_tokens = self.prompt_tokens
             current_completion_tokens = self.completion_tokens
@@ -3938,9 +3088,7 @@ class AdaptiveMedRAG(MedRAG):
                 previous_queries + current_queries
             )
 
-            # ====================================================
-            # SAVE COMPLETE STATE
-            # ====================================================
+            
             state_assessment = check_stopping_gate(
                 self,
                 question,
@@ -3968,9 +3116,7 @@ class AdaptiveMedRAG(MedRAG):
                 "options":
                     options,
 
-                # ================================================
-                # QUERIES
-                # ================================================
+                
 
                 "queries": action_list,
 
@@ -3986,9 +3132,7 @@ class AdaptiveMedRAG(MedRAG):
                 "assessment_reasoning": state_assessment[3],
                 "assessment_type": "evidence_based",
 
-                # ================================================
-                # RETRIEVAL
-                # ================================================
+                
 
                 "retrieval_records":
                     retrieval_records,
@@ -4005,16 +3149,12 @@ class AdaptiveMedRAG(MedRAG):
                     if doc.get("id") is not None
                 ],
 
-                # ================================================
-                # CONTEXT / EVIDENCE
-                # ================================================
+                
 
                 "context":
                     context,
 
-                # ================================================
-                # NOVELTY
-                # ================================================
+                
 
                 "evidence_stats":
                     evidence_stats,
@@ -4025,13 +3165,11 @@ class AdaptiveMedRAG(MedRAG):
                     ) is not None,
 
 
-                # ================================================
-                # COST
-                # ================================================
+                
 
                 "cost": {
 
-                    # ---------- cumulative ----------
+                    
 
                     "queries_so_far":
                         queries_so_far,
@@ -4051,8 +3189,7 @@ class AdaptiveMedRAG(MedRAG):
                     "latency_seconds_so_far":
                         time.perf_counter() - start_time,
 
-                    # ---------- incremental ----------
-
+                    
                     "queries_this_iteration":
                         current_queries,
 
@@ -4099,9 +3236,7 @@ class AdaptiveMedRAG(MedRAG):
                 state
             )
 
-            # ====================================================
-            # PRINT STATE SUMMARY
-            # ====================================================
+            
 
             unique_doc_count = len(set(iteration_doc_ids))
 
@@ -4113,9 +3248,7 @@ class AdaptiveMedRAG(MedRAG):
             print(f"  Semantic novelty: {evidence_stats['semantic_novelty']}")
             print(f"  Semantic redundancy: {evidence_stats['semantic_redundancy']}")
 
-        # ========================================================
-        # FINAL ANSWER USING FULL TRAJECTORY
-        # ========================================================
+        
 
         final_messages = [
             {
@@ -4155,9 +3288,7 @@ class AdaptiveMedRAG(MedRAG):
             - start_time
         )
 
-        # ========================================================
-        # COMPLETE RESULT
-        # ========================================================
+        
 
         result = {
 
