@@ -1,4 +1,3 @@
-# mdp_dataset.py
 
 import ast
 import json
@@ -7,9 +6,6 @@ import time
 from typing import Any, Dict, List, Optional
 
 
-# ============================================================
-# 1. PARSE MODEL ANSWER
-# ============================================================
 
 import re
 
@@ -27,9 +23,7 @@ def parse_predicted_letter(text):
 
     if match:
         return match.group(1).upper()
-    # --------------------------------------------------------
-    # 1. Look specifically for the final answer section
-    # --------------------------------------------------------
+    
     answer_section = re.search(
         r"(?:##\s*Answer|###\s*Answer)\s*(.*)$",
         text,
@@ -70,9 +64,7 @@ def parse_predicted_letter(text):
         if match:
             return match.group(1).upper()
 
-    # --------------------------------------------------------
-    # 2. Search full response for explicit answer statements
-    # --------------------------------------------------------
+    
     matches = re.findall(
         r"(?:correct\s+answer|best\s+answer|final\s+answer|answer)"
         r"\s*(?:is|:)\s*\**\s*([A-D])\b",
@@ -83,9 +75,7 @@ def parse_predicted_letter(text):
     if matches:
         return matches[-1].upper()
 
-    # --------------------------------------------------------
-    # 3. Bolded answer like **B. text**
-    # --------------------------------------------------------
+
     matches = re.findall(
         r"\*\*\s*([A-D])\s*[\.\):]",
         text,
@@ -96,21 +86,10 @@ def parse_predicted_letter(text):
         return matches[-1].upper()
 
     return "UNKNOWN"
-# ============================================================
-# 2. NORMALIZE GOLD ANSWER
-# ============================================================
+
 
 def normalize_gold_answer(answer_idx: Any) -> str:
-    """
-    Convert MedQA answer index to A/B/C/D.
 
-    0 -> A
-    1 -> B
-    2 -> C
-    3 -> D
-
-    Also accepts an already-normalized letter.
-    """
 
     if isinstance(answer_idx, int):
 
@@ -132,9 +111,7 @@ def normalize_gold_answer(answer_idx: Any) -> str:
     return "UNKNOWN"
 
 
-# ============================================================
-# 3. JSON-SAFE CONVERSION
-# ============================================================
+
 
 def make_json_safe(obj: Any) -> Any:
     """
@@ -201,10 +178,7 @@ def evaluate_no_rag_state(
     gold,
     n_trials=3
 ):
-    """
-    Evaluate the pre-retrieval S0 state using n independent
-    LLM answer generations with no retrieved evidence.
-    """
+
 
     trial_outputs = []
 
@@ -255,8 +229,6 @@ def evaluate_no_rag_state(
 
         total_latency += latency
 
-        # If your generate() exposes token metrics, add them here.
-        # Otherwise leave them at 0 for now.
 
     reward = sum(
         x["correct"] for x in trial_outputs
@@ -276,9 +248,6 @@ def evaluate_no_rag_state(
     }
 
 
-# ============================================================
-# 4. COMPUTE COST-AWARE REWARD
-# ============================================================
 
 def compute_cost_aware_reward(
     accuracy_reward: float,
@@ -320,9 +289,6 @@ def compute_cost_aware_reward(
     )
 
 
-# ============================================================
-# 5. EVALUATE STOP REWARD
-# ============================================================
 
 def evaluate_stop_reward(
     medrag_runner,
@@ -331,40 +297,13 @@ def evaluate_stop_reward(
     gold: str,
     state: Dict[str, Any],
     n_trials: int = 3,
-    reward_llm_runner=None,
-    reward_temperature: float = 0.7,
+    reward_temperature: float = 0.9,
     **kwargs
 ) -> Dict[str, Any]:
-    """
-    Estimate the reward of taking STOP at a particular state.
 
-    IMPORTANT:
-        - No retrieval is performed.
-        - No new queries are generated.
-        - The exact state context is reused.
-        - Only final-answer generation is repeated.
+    
+    trial_outputs = []
 
-    If `reward_llm_runner` is given (a MedRAG instance with
-    llm_name="OpenAI/gpt-4o-mini" or similar), reward is computed from a
-    SINGLE deterministic call's token logprobs on the gold letter --
-    continuous 0-1, no sampling, no n_trials loop. This is both cheaper
-    (1 call vs n_trials calls) and finer-grained than trial-averaging,
-    since exact-match trial voting with the existing generate() (which
-    runs greedy/temperature=0 decoding) gives no real variation to average
-    over -- any fractional rewards you saw with n_trials averaging were
-    incidental non-determinism in the serving stack, not real sampling.
-
-    If `reward_llm_runner` is None (default), falls back to the original
-    n_trials exact-match voting behavior, unchanged, using medrag_runner.
-
-    The reward is:
-        mean(correctness over trials)          [n_trials mode]
-        P(gold letter | state)                 [reward_llm_runner mode]
-    """
-
-    # ========================================================
-    # BUILD OPTION TEXT
-    # ========================================================
 
     if options is not None:
 
@@ -386,9 +325,6 @@ def evaluate_stop_reward(
 
         options_str = ""
 
-    # ========================================================
-    # QUESTION PROMPT
-    # ========================================================
 
     question_prompt = (
         f"Here is the question:\n"
@@ -396,9 +332,6 @@ def evaluate_stop_reward(
         f"{options_str}"
     )
 
-    # ========================================================
-    # STATE CONTEXT
-    # ========================================================
 
     context = str(
         state.get(
@@ -407,91 +340,7 @@ def evaluate_stop_reward(
         )
     ).strip()
 
-    # ========================================================
-    # LOGPROB MODE (single call, continuous reward)
-    # ========================================================
-
-    if reward_llm_runner is not None:
-
-        if options is None:
-            raise ValueError(
-                "reward_llm_runner (logprob-based reward) requires MCQ "
-                "options -- it scores P(gold letter), which is undefined "
-                "for open-ended questions."
-            )
-
-        option_letters = sorted(options.keys())
-        is_local = not any(x in reward_llm_runner.llm_name.lower() for x in ("openai", "arvan", "gemini"))
-
-        if is_local:
-            # Reasoning-preserving path: SAME messages/template as the
-            # n_trials branch below (full chain-of-thought allowed), so
-            # there is no accuracy cost. The per-letter probability is read
-            # off the model's own logits at wherever it actually commits to
-            # its final answer, not forced onto the first token.
-            messages = [
-                {
-                    "role": "system",
-                    "content": medrag_runner.templates["i_medrag_system"],
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"{context}\n\n"
-                        f"{question_prompt}\n\n"
-                        f"{medrag_runner.templates['follow_up_answer']}"
-                    ),
-                },
-            ]
-            raw_text, letter_probs = reward_llm_runner.generate_answer_with_letter_probs_local(
-                messages, option_letters=option_letters,
-            )
-            
-        else:
-            # API-based path (OpenAI-schema gateway, e.g. Liara/Chabokan, or
-            # Arvan): now uses the SAME reasoning-permitting template as the
-            # local path -- confirmed working via Chabokan-routed
-            # Llama-3.1-8B-Instruct returning populated logprobs on normal
-            # (non-bare-letter) completions. No accuracy cost vs. n_trials.
-            messages = [
-                {
-                    "role": "system",
-                    "content": medrag_runner.templates["i_medrag_system"],
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"{context}\n\n"
-                        f"{question_prompt}\n\n"
-                        f"{medrag_runner.templates['follow_up_answer']}"
-                    ),
-                },
-            ]
-            raw_text, letter_probs = reward_llm_runner.generate_answer_with_letter_probs(
-                messages, option_letters=option_letters,
-            )
-
-       
-        reward = letter_probs.get(gold, 0.0)
-
-        return {
-            "state_id": state.get("state_id"),
-            "iteration": state.get("iteration"),
-            "action": "STOP",
-            "n_trials": 1,
-            "reward": reward,
-            "mean_accuracy": reward,
-            "scoring_method": "logprob_local" if is_local else "logprob_api",
-            "letter_probs": letter_probs,
-            "raw_answer": raw_text,
-            "queries_so_far": state.get("queries_so_far", None),
-        }
-
-    # ========================================================
-    # N-TRIALS MODE (original behavior, unchanged)
-    # ========================================================
-
-    trial_outputs = []
+    
 
     for trial_idx in range(
         n_trials
@@ -525,7 +374,7 @@ def evaluate_stop_reward(
             raw_answer = (
                 medrag_runner.generate(
                     messages,
-                    temperature=reward_temperature,  # was silently defaulting to 0.0 -- see note above
+                    temperature=reward_temperature,
                     **kwargs
                 )
             )
@@ -584,9 +433,7 @@ def evaluate_stop_reward(
                     - trial_start
             })
 
-    # ========================================================
-    # REWARD
-    # ========================================================
+
 
     valid_trials = [
         item
@@ -610,9 +457,7 @@ def evaluate_stop_reward(
 
         reward = 0.0
 
-    # ========================================================
-    # COST INFORMATION
-    # ========================================================
+
 
     queries_so_far = state.get(
         "queries_so_far",
@@ -684,32 +529,12 @@ def evaluate_stop_reward(
     return result
 
 
-# ============================================================
-# 6. BUILD MDP TRANSITIONS
-# ============================================================
 
 def build_mdp_transitions(
     states: List[Dict[str, Any]],
     stop_rewards: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """
-    Convert a full trajectory into Stage-1 MDP transitions.
 
-    Action space:
-
-        STOP
-        CONTINUE
-
-    Example:
-
-        S1 --STOP------> terminal
-        S1 --CONTINUE--> S2
-
-        S2 --STOP------> terminal
-        S2 --CONTINUE--> S3
-
-        S3 --STOP------> terminal
-    """
 
     transitions = []
 
@@ -728,9 +553,7 @@ def build_mdp_transitions(
             "iteration"
         )
 
-        # ====================================================
-        # STOP
-        # ====================================================
+
 
         stop_reward = 0.0
 
@@ -766,9 +589,7 @@ def build_mdp_transitions(
                 None
         })
 
-        # ====================================================
-        # CONTINUE
-        # ====================================================
+
 
         if index < len(states) - 1:
 
@@ -802,18 +623,12 @@ def build_mdp_transitions(
     return transitions
 
 
-# ============================================================
-# 7. ADD CUMULATIVE INFORMATION TO STATES
-# ============================================================
+
 
 def enrich_states_with_cumulative_cost(
     states: List[Dict[str, Any]]
 ) -> List[Dict[str, Any]]:
-    """
-    Add cumulative query/retrieval counts to each state.
 
-    This does not modify the original RAG logic.
-    """
 
     cumulative_queries = 0
     cumulative_successful = 0
@@ -831,8 +646,7 @@ def enrich_states_with_cumulative_cost(
             or 0
         )
 
-        # If the collector did not store per-state query
-        # count but has the query list, use that instead.
+
         if current_queries == 0:
 
             current_queries = len(
@@ -846,9 +660,6 @@ def enrich_states_with_cumulative_cost(
             current_queries
         )
 
-        # ----------------------------------------------------
-        # Retrieval counts
-        # ----------------------------------------------------
 
         retrieval_records = state.get(
             "retrieval_records",
@@ -891,9 +702,6 @@ def enrich_states_with_cumulative_cost(
             "failed_retrievals_so_far"
         ] = cumulative_failed
 
-        # ----------------------------------------------------
-        # Novelty availability
-        # ----------------------------------------------------
 
         evidence_stats = (
             state_copy.get(
@@ -922,10 +730,6 @@ def enrich_states_with_cumulative_cost(
     return enriched_states
 
 
-# ============================================================
-# 8. BUILD ONE QUESTION RECORD
-# ============================================================
-
 def build_question_record(
     question_id: str,
     question: str,
@@ -939,26 +743,17 @@ def build_question_record(
     Create the complete per-question MDP record.
     """
 
-    # --------------------------------------------------------
-    # Add cumulative cost/state information
-    # --------------------------------------------------------
 
     states = enrich_states_with_cumulative_cost(
         states
     )
 
-    # --------------------------------------------------------
-    # Build transitions
-    # --------------------------------------------------------
 
     transitions = build_mdp_transitions(
         states=states,
         stop_rewards=stop_rewards
     )
 
-    # --------------------------------------------------------
-    # Final state
-    # --------------------------------------------------------
 
     if stop_rewards:
 
@@ -972,10 +767,6 @@ def build_question_record(
     else:
 
         final_state_reward = 0.0
-
-    # --------------------------------------------------------
-    # Record
-    # --------------------------------------------------------
 
     record = {
 
@@ -993,44 +784,30 @@ def build_question_record(
         "gold":
             gold,
 
-        # ----------------------------------------------------
-        # States
-        # ----------------------------------------------------
 
         "trajectory":
             make_json_safe(
                 states
             ),
 
-        # ----------------------------------------------------
-        # STOP rewards
-        # ----------------------------------------------------
 
         "stop_rewards":
             make_json_safe(
                 stop_rewards
             ),
 
-        # ----------------------------------------------------
-        # MDP transitions
-        # ----------------------------------------------------
+
 
         "mdp_transitions":
             make_json_safe(
                 transitions
             ),
 
-        # ----------------------------------------------------
-        # Terminal reward
-        # ----------------------------------------------------
 
         "final_state_reward":
             final_state_reward
     }
 
-    # --------------------------------------------------------
-    # Full-trajectory generation result
-    # --------------------------------------------------------
 
     if trajectory_result is not None:
 
@@ -1054,9 +831,6 @@ def build_question_record(
     return record
 
 
-# ============================================================
-# 9. BUILD EXPERIMENT METADATA
-# ============================================================
 
 def build_experiment_config(
     dataset_name: str,
@@ -1134,9 +908,6 @@ def build_experiment_config(
     }
 
 
-# ============================================================
-# 10. SAVE DATASET
-# ============================================================
 
 def save_mdp_dataset(
     dataset_records: List[Dict[str, Any]],
@@ -1182,9 +953,6 @@ def save_mdp_dataset(
     )
 
 
-# ============================================================
-# 11. BASIC DATASET VALIDATION
-# ============================================================
 
 def validate_mdp_dataset(
     dataset_records: List[Dict[str, Any]]

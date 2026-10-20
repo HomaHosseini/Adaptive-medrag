@@ -49,9 +49,6 @@ class EvidenceCoverageAnalyzer:
     def __init__(self, medrag_instance):
         self.medrag = medrag_instance
 
-    # ==========================================================
-    # PUBLIC METHOD
-    # ==========================================================
 
     def analyze(
         self,
@@ -81,9 +78,7 @@ class EvidenceCoverageAnalyzer:
             It now means information-need coverage.
         """
 
-        # ------------------------------------------------------
-        # No evidence
-        # ------------------------------------------------------
+        
 
         if not context or not context.strip():
 
@@ -96,9 +91,7 @@ class EvidenceCoverageAnalyzer:
                     "No retrieved evidence available.",
             }
 
-        # ------------------------------------------------------
-        # No information needs
-        # ------------------------------------------------------
+       
 
         if not information_needs:
 
@@ -111,9 +104,7 @@ class EvidenceCoverageAnalyzer:
                     "No information needs were provided.",
             }
 
-        # ------------------------------------------------------
-        # Format planner information
-        # ------------------------------------------------------
+        
 
         information_need_text = (
             self._format_information_needs(
@@ -133,9 +124,7 @@ class EvidenceCoverageAnalyzer:
             )
         )
 
-        # ======================================================
-        # PROMPT
-        # ======================================================
+        
 
         prompt = f"""
 You are a strict medical evidence coverage analyzer.
@@ -386,9 +375,7 @@ IMPORTANT:
                 response
             )
 
-            # ==================================================
-            # INFORMATION-NEED COVERAGE
-            # ==================================================
+            
 
             raw_coverage = result.get(
                 "coverage",
@@ -401,9 +388,7 @@ IMPORTANT:
                 )
             )
 
-            # ==================================================
-            # CONSTRAINT COVERAGE
-            # ==================================================
+            
 
             raw_constraints = (
                 result.get(
@@ -417,10 +402,6 @@ IMPORTANT:
                     raw_constraints
                 )
             )
-
-            # ==================================================
-            # PYTHON AGGREGATION
-            # ==================================================
 
             core_coverage = (
                 self._calculate_core_coverage(
@@ -475,10 +456,7 @@ IMPORTANT:
                     f"Coverage analyzer error: {e}",
             }
 
-    # ==========================================================
-    # JSON PARSER
-    # ==========================================================
-
+    
     @staticmethod
     def _parse_json_response(
         response: str
@@ -501,10 +479,7 @@ IMPORTANT:
 
         text = response.strip()
 
-        # ------------------------------------------------------
-        # Markdown fences
-        # ------------------------------------------------------
-
+        
         markdown_match = re.search(
             r"```(?:json)?\s*([\s\S]*?)\s*```",
             text,
@@ -519,10 +494,7 @@ IMPORTANT:
                 .strip()
             )
 
-        # ------------------------------------------------------
-        # Extract JSON object
-        # ------------------------------------------------------
-
+        
         start = text.find("{")
         end = text.rfind("}")
 
@@ -536,10 +508,7 @@ IMPORTANT:
                 start:end + 1
             ]
 
-        # ------------------------------------------------------
-        # Direct JSON
-        # ------------------------------------------------------
-
+        
         try:
 
             parsed = json.loads(
@@ -552,9 +521,7 @@ IMPORTANT:
         except json.JSONDecodeError:
             pass
 
-        # ------------------------------------------------------
-        # Remove trailing commas
-        # ------------------------------------------------------
+        
 
         sanitized = re.sub(
             r",\s*([}\]])",
@@ -574,10 +541,7 @@ IMPORTANT:
         except json.JSONDecodeError:
             pass
 
-        # ------------------------------------------------------
-        # json_repair fallback
-        # ------------------------------------------------------
-
+       
         try:
 
             import json_repair
@@ -597,10 +561,7 @@ IMPORTANT:
 
             pass
 
-        # ------------------------------------------------------
-        # Hard failure
-        # ------------------------------------------------------
-
+        
         print(
             "[Coverage JSON Parse Warning]"
         )
@@ -614,9 +575,7 @@ IMPORTANT:
             "Unable to parse coverage JSON."
         )
 
-    # ==========================================================
-    # CLEAN RESULTS
-    # ==========================================================
+    
 
     def _clean_results(
         self,
@@ -713,9 +672,7 @@ IMPORTANT:
 
         return cleaned
 
-    # ==========================================================
-    # CORE / INFORMATION-NEED COVERAGE
-    # ==========================================================
+
 
     def _calculate_core_coverage(
         self,
@@ -774,10 +731,7 @@ IMPORTANT:
             / len(information_needs)
         )
 
-    # ==========================================================
-    # WEIGHTED COVERAGE
-    # ==========================================================
-
+    
     def _calculate_weighted_coverage(
         self,
         information_needs,
@@ -862,9 +816,7 @@ IMPORTANT:
             / total_weight
         )
 
-    # ==========================================================
-    # FORMAT INFORMATION NEEDS
-    # ==========================================================
+    
 
     @staticmethod
     def _format_information_needs(
@@ -922,9 +874,6 @@ IMPORTANT:
             lines
         )
 
-    # ==========================================================
-    # FORMAT STRINGS
-    # ==========================================================
 
     @staticmethod
     def _format_strings(

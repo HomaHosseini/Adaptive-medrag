@@ -6,9 +6,7 @@ import torch
 import torch.nn as nn
 
 
-# ============================================================
-# PATHS
-# ============================================================
+
 
 MODEL_PATH = Path("stop_rag_mdp_output/stop_rag_q_network.pt")
 SCALER_PATH = Path("stop_rag_mdp_output/stop_rag_feature_scaler.json")
@@ -19,9 +17,6 @@ DATASET_PATH = Path(
 THRESHOLD = 0.0
 
 
-# ============================================================
-# MODEL
-# ============================================================
 
 class QNetwork(nn.Module):
     def __init__(self, input_dim, hidden=64, dropout=0.10):
@@ -47,9 +42,7 @@ class QNetwork(nn.Module):
         return torch.stack([q_stop, q_cont], dim=1)
 
 
-# ============================================================
-# LOAD
-# ============================================================
+
 
 with open(SCALER_PATH, "r", encoding="utf-8") as f:
     scaler_data = json.load(f)
@@ -79,9 +72,6 @@ model.load_state_dict(checkpoint["model_state_dict"])
 model.eval()
 
 
-# ============================================================
-# FEATURE PREPROCESSING
-# ============================================================
 
 def preprocess(features):
 
@@ -100,9 +90,6 @@ def preprocess(features):
     ).unsqueeze(0)
 
 
-# ============================================================
-# PREDICT
-# ============================================================
 
 def predict_action(features):
 
@@ -129,9 +116,6 @@ def predict_action(features):
     }
 
 
-# ============================================================
-# TEST ALL STATES
-# ============================================================
 
 correct = 0
 total = 0

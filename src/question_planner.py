@@ -3,32 +3,7 @@ import re
 
 
 class QuestionPlanner:
-    """
-    Clinical Schema + Retrieval Planning Agent.
-
-    Runs once before retrieval.
-
-    The planner identifies:
-        1. clinical intent
-        2. question target
-        3. observed / explicitly stated entities
-        4. decision-critical constraints
-        5. optional retrieval hypotheses
-        6. relationships that need evidence
-        7. concrete information needs
-        8. retrieval necessity
-        9. structural complexity
-        10. initial query budget
-        11. initial retrieval query
-
-    Important:
-        - The planner may generate hypotheses to improve retrieval.
-        - Hypotheses are NOT evidence.
-        - If the question already establishes the target condition,
-          the planner should not unnecessarily generate diagnostic
-          hypotheses for that condition.
-        - The planner never produces the final answer.
-    """
+   
 
     VALID_INTENTS = {
         "diagnosis",
@@ -54,9 +29,7 @@ class QuestionPlanner:
     def __init__(self, medrag_instance):
         self.medrag = medrag_instance
 
-    # ==========================================================
-    # PUBLIC METHOD
-    # ==========================================================
+    
 
     def plan(self, question):
 
@@ -109,9 +82,7 @@ class QuestionPlanner:
 
             return self._fallback_plan()
 
-    # ==========================================================
-    # PROMPT
-    # ==========================================================
+    
 
     def _build_prompt(self, question):
 
@@ -560,9 +531,7 @@ Use exactly this structure:
 Do not add any other keys.
 """
 
-    # ==========================================================
-    # JSON PARSER
-    # ==========================================================
+    
 
     @staticmethod
     def _parse_json_response(response):
@@ -658,15 +627,10 @@ Do not add any other keys.
             "Unable to parse planner JSON."
         )
 
-    # ==========================================================
-    # PLAN CLEANING
-    # ==========================================================
-
+    
     def _clean_plan(self, result, question):
 
-        # ------------------------------------------------------
-        # Intent
-        # ------------------------------------------------------
+        
 
         intent = str(
             result.get(
@@ -678,9 +642,7 @@ Do not add any other keys.
         if intent not in self.VALID_INTENTS:
             intent = "other"
 
-        # ------------------------------------------------------
-        # Question target
-        # ------------------------------------------------------
+        
 
         question_target = str(
             result.get(
@@ -694,9 +656,6 @@ Do not add any other keys.
         ):
             question_target = ""
 
-        # ------------------------------------------------------
-        # Observed entities
-        # ------------------------------------------------------
 
         observed_entities = (
             self._clean_string_list(
@@ -707,16 +666,7 @@ Do not add any other keys.
             )
         )
 
-        # NOTE:
-        # Do not aggressively delete paraphrases here.
-        # Some valid medical normalization will not be literal
-        # substrings of the question.
-        #
-        # Instead, perform only obvious sanity checks.
-
-        # ------------------------------------------------------
-        # Constraints
-        # ------------------------------------------------------
+        
 
         constraints = (
             self._clean_string_list(
@@ -727,9 +677,7 @@ Do not add any other keys.
             )
         )
 
-        # ------------------------------------------------------
-        # Hypotheses
-        # ------------------------------------------------------
+        
 
         hypotheses = (
             self._clean_string_list(
@@ -740,9 +688,7 @@ Do not add any other keys.
             )
         )
 
-        # ------------------------------------------------------
-        # Relationships
-        # ------------------------------------------------------
+        
 
         relationships = (
             self._clean_string_list(
@@ -753,9 +699,7 @@ Do not add any other keys.
             )
         )
 
-        # ------------------------------------------------------
-        # Information needs
-        # ------------------------------------------------------
+        
 
         information_needs = (
             self._clean_information_needs(
@@ -766,9 +710,7 @@ Do not add any other keys.
             )
         )
 
-        # ------------------------------------------------------
-        # Retrieval need
-        # ------------------------------------------------------
+        
 
         retrieval_need = str(
             result.get(
@@ -785,9 +727,7 @@ Do not add any other keys.
                 "RAG_RECOMMENDED"
             )
 
-        # ------------------------------------------------------
-        # Complexity
-        # ------------------------------------------------------
+        
 
         try:
 
@@ -813,9 +753,7 @@ Do not add any other keys.
             )
         )
 
-        # ------------------------------------------------------
-        # Initial budget
-        # ------------------------------------------------------
+        
 
         try:
 
@@ -849,10 +787,7 @@ Do not add any other keys.
 
             initial_budget = 1
 
-        # ------------------------------------------------------
-        # Query
-        # ------------------------------------------------------
-
+        
         q_init = str(
             result.get(
                 "q_init",
@@ -869,9 +804,7 @@ Do not add any other keys.
 
             q_init = ""
 
-        # ------------------------------------------------------
-        # Reasoning
-        # ------------------------------------------------------
+        
 
         reasoning = str(
             result.get(
@@ -926,16 +859,12 @@ Do not add any other keys.
             plan
         )
 
-    # ==========================================================
-    # VALIDATION
-    # ==========================================================
+    
 
     @staticmethod
     def _validate_plan(plan):
 
-        # ------------------------------------------------------
-        # NO_RAG
-        # ------------------------------------------------------
+        
 
         if (
             plan["retrieval_need"]
@@ -948,9 +877,7 @@ Do not add any other keys.
 
             plan["q_init"] = ""
 
-        # ------------------------------------------------------
-        # RAG consistency
-        # ------------------------------------------------------
+        
 
         else:
 
@@ -964,10 +891,7 @@ Do not add any other keys.
                     "initial_query_budget"
                 ] = 1
 
-        # ------------------------------------------------------
-        # Missing target
-        # ------------------------------------------------------
-
+        
         if (
             plan["retrieval_need"]
             != "NO_RAG"
@@ -978,9 +902,7 @@ Do not add any other keys.
                 "RAG_RECOMMENDED"
             )
 
-        # ------------------------------------------------------
-        # No information needs
-        # ------------------------------------------------------
+        
 
         if (
             plan["retrieval_need"]
@@ -992,13 +914,7 @@ Do not add any other keys.
                 "RAG_RECOMMENDED"
             )
 
-        # ------------------------------------------------------
-        # If target is explicitly known,
-        # hypotheses should normally be empty
-        # for diagnosis-type intent.
-        #
-        # This is intentionally conservative.
-        # ------------------------------------------------------
+        
 
         if plan["intent"] in {
             "association",
@@ -1010,15 +926,11 @@ Do not add any other keys.
             "adverse_effect",
         }:
 
-            # Don't automatically delete hypotheses.
-            # They may still be useful for retrieval.
             pass
 
         return plan
 
-    # ==========================================================
-    # LIST CLEANER
-    # ==========================================================
+   
 
     @staticmethod
     def _clean_string_list(items):
@@ -1082,9 +994,7 @@ Do not add any other keys.
 
         return output
 
-    # ==========================================================
-    # INFORMATION NEED CLEANER
-    # ==========================================================
+    
 
     @staticmethod
     def _clean_information_needs(items):
@@ -1163,9 +1073,6 @@ Do not add any other keys.
 
         return cleaned
 
-    # ==========================================================
-    # TEXT SANITY CHECK
-    # ==========================================================
 
     @staticmethod
     def _is_reasonable_text(value):
@@ -1180,11 +1087,11 @@ Do not add any other keys.
         if not value:
             return False
 
-        # Prevent pathological model corruption
+        
         if len(value) > 500:
             return False
 
-        # Catch things like !!!!!!!!
+        
         if re.search(
             r"(.)\1{8,}",
             value
@@ -1193,9 +1100,7 @@ Do not add any other keys.
 
         return True
 
-    # ==========================================================
-    # PRINT
-    # ==========================================================
+    
 
     @staticmethod
     def _print_plan(plan):
@@ -1286,9 +1191,7 @@ Do not add any other keys.
             f"{plan['reasoning']}"
         )
 
-    # ==========================================================
-    # FALLBACK
-    # ==========================================================
+    
 
     @staticmethod
     def _fallback_plan():

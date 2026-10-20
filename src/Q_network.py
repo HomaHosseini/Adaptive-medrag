@@ -1,240 +1,284 @@
-import json
-from pathlib import Path
-
-import numpy as np
+import os
 import torch
 import torch.nn as nn
+from transformers import AutoTokenizer, AutoModel
+import json
 
 
-class QNetwork(nn.Module):
 
-    def __init__(self, input_dim, hidden=64, dropout=0.10):
+class StopRAGQNetwork(nn.Module):
+    def __init__(
+        self,
+        model_name="microsoft/deberta-v3-base",
+        hidden_size=256,
+        dropout=0.2,
+    ):
         super().__init__()
 
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, hidden),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden, hidden),
-            nn.ReLU(),
+        self.encoder = AutoModel.from_pretrained(
+            model_name,
+            torch_dtype=torch.float32,
         )
 
-        self.stop_head = nn.Linear(hidden, 1)
-        self.cont_head = nn.Linear(hidden, 1)
+        enc_dim = self.encoder.config.hidden_size
 
-    def forward(self, x):
-        h = self.net(x)
+        
+        self.stop_head = nn.Sequential(
+            nn.Linear(enc_dim, hidden_size),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size, 1),
+        )
 
-        q_stop = self.stop_head(h).squeeze(-1)
-        q_cont = self.cont_head(h).squeeze(-1)
+        self.cont_head = nn.Sequential(
+            nn.Linear(enc_dim, hidden_size),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size, 1),
+        )
 
-        return torch.stack([q_stop, q_cont], dim=1)
+    def forward(
+        self,
+        input_ids,
+        attention_mask,
+        token_type_ids=None,
+    ):
+        
+        if token_type_ids is not None:
+            outputs = self.encoder(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+            )
+        else:
+            outputs = self.encoder(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+            )
 
+        # [CLS] representation
+        pooled = outputs.last_hidden_state[:, 0, :]
 
-class StopRAGController:
+        stop_q = self.stop_head(pooled).squeeze(-1)
+        cont_q = self.cont_head(pooled).squeeze(-1)
+
+        return stop_q, cont_q
+
+class TrainedStopRAGController:
+    """
+    Inference wrapper around the trained Stop-RAG Q-network.
+    """
 
     def __init__(
         self,
-        model_path,
-        scaler_path,
-        threshold=0.0,
-        device=None,
+        checkpoint_path="./stop_rag_ckpt/best_stop_rag_qnetwork.pt",
+        model_name="microsoft/deberta-v3-base",
+        max_length=512,
+        device=None
     ):
 
-        self.device = torch.device(
-            device or
-            ("cuda" if torch.cuda.is_available() else "cpu")
+        self.checkpoint_path = checkpoint_path
+        self.model_name = model_name
+        self.max_length = max_length
+
+        if device is None:
+
+            device = (
+                "cuda"
+                if torch.cuda.is_available()
+                else "cpu"
+            )
+
+        self.device = torch.device(device)
+
+        print(
+            f"[Stop-RAG] Loading tokenizer: "
+            f"{model_name}"
         )
 
-        # -------------------------
-        # scaler
-        # -------------------------
-
-        with open(scaler_path, "r", encoding="utf-8") as f:
-            scaler = json.load(f)
-
-        self.feature_names = scaler["feature_names"]
-
-        self.mean = np.array(
-            scaler["mean"],
-            dtype=np.float32
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_name
         )
 
-        self.scale = np.array(
-            scaler["scale"],
-            dtype=np.float32
+        print(
+            f"[Stop-RAG] Loading Q-network..."
         )
 
-        self.medians = np.array(
-            scaler["nan_fill_median"],
-            dtype=np.float32
+        self.model = StopRAGQNetwork(
+            model_name=model_name
         )
-
-        # -------------------------
-        # model
-        # -------------------------
 
         checkpoint = torch.load(
-            model_path,
+            checkpoint_path,
             map_location=self.device
         )
 
-        self.model = QNetwork(
-            input_dim=checkpoint["input_dim"],
-            hidden=checkpoint["hidden"]
+        config_path = os.path.join(
+            os.path.dirname(checkpoint_path),
+            "config.json"
         )
+
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+
+            self.margin_threshold = float(
+                config.get("margin_threshold", 0.0)
+            )
+        else:
+            self.margin_threshold = 0.0
+
+        print(
+            f"[Stop-RAG] Margin threshold: "
+            f"{self.margin_threshold}"
+        )
+
+        
+
+        if isinstance(checkpoint, dict):
+
+            if "model_state_dict" in checkpoint:
+
+                state_dict = (
+                    checkpoint["model_state_dict"]
+                )
+
+            elif "state_dict" in checkpoint:
+
+                state_dict = (
+                    checkpoint["state_dict"]
+                )
+
+            else:
+
+                state_dict = checkpoint
+
+        else:
+
+            state_dict = checkpoint
 
         self.model.load_state_dict(
-            checkpoint["model_state_dict"]
+            state_dict
         )
 
-        self.model.to(self.device)
+        self.model.to(
+            self.device
+        )
+
         self.model.eval()
 
-        self.threshold = threshold
-
-    # --------------------------------------------------------
-    # Convert your trajectory state to feature vector
-    # --------------------------------------------------------
-
-    def extract_features(self, state):
-
-        evidence = state.get("evidence_stats") or {}
-        cost = state.get("cost") or {}
-
-        def value(v):
-
-            if v is None:
-                return np.nan
-
-            if isinstance(v, bool):
-                return float(v)
-
-            if isinstance(v, (int, float)):
-                if np.isfinite(v):
-                    return float(v)
-
-            return np.nan
-
-        features = {
-
-            "iteration":
-                state.get("iteration"),
-
-            "confidence":
-                state.get("confidence"),
-
-            "answerable":
-                state.get("answerable"),
-
-            "discrimination":
-                state.get("discrimination"),
-
-            "num_documents":
-                evidence.get("num_documents"),
-
-            "num_new_documents":
-                evidence.get("num_new_documents"),
-
-            "document_novelty":
-                evidence.get("document_novelty"),
-
-            "semantic_novelty":
-                evidence.get("semantic_novelty"),
-
-            "semantic_median_novelty":
-                evidence.get("semantic_median_novelty"),
-
-            "high_semantic_novelty_fraction":
-                evidence.get(
-                    "high_semantic_novelty_fraction"
-                ),
-
-            "semantic_redundancy":
-                evidence.get("semantic_redundancy"),
-
-            "found_embeddings":
-                evidence.get("found_embeddings"),
-
-            "requested_query_count":
-                state.get("requested_query_count"),
-
-            "actual_query_count":
-                state.get("actual_query_count"),
-
-            "queries_so_far":
-                cost.get("queries_so_far"),
-
-            "llm_calls_so_far":
-                cost.get("llm_calls_so_far"),
-
-            "prompt_tokens_so_far":
-                cost.get("prompt_tokens_so_far"),
-
-            "completion_tokens_so_far":
-                cost.get(
-                    "completion_tokens_so_far"
-                ),
-
-            "total_tokens_so_far":
-                cost.get("total_tokens_so_far"),
-
-            "latency_seconds_so_far":
-                cost.get(
-                    "latency_seconds_so_far"
-                ),
-
-            "successful_retrievals_so_far":
-                cost.get(
-                    "successful_retrievals_so_far"
-                ),
-
-            "failed_retrievals_so_far":
-                cost.get(
-                    "failed_retrievals_so_far"
-                ),
-        }
-
-        return np.array(
-            [
-                value(features[name])
-                for name in self.feature_names
-            ],
-            dtype=np.float32
+        print(
+            f"[Stop-RAG] Loaded successfully."
         )
 
-    # --------------------------------------------------------
-    # Predict
-    # --------------------------------------------------------
+        print(
+            f"[Stop-RAG] Device: "
+            f"{self.device}"
+        )
 
-    def predict(self, state):
+    
+    def build_state(
+        self,
+        question,
+        options,
+        evidence
+    ):
+        
 
-        x = self.extract_features(state)
+        
+        parts = [f"Question: {question.strip()}"]
 
-        # NaN replacement
-        invalid = ~np.isfinite(x)
+        if options:
+            opt_str = " ".join(
+                f"({key}) {options[key]}"
+                for key in sorted(options.keys())
+            )
+            parts.append(f"Options: {opt_str}")
 
-        x[invalid] = self.medians[invalid]
+        question_text = " ".join(parts)
 
-        # StandardScaler transformation
-        x = (x - self.mean) / self.scale
+        
+        evidence = (evidence or "").strip()
 
-        x = torch.tensor(
-            x,
-            dtype=torch.float32,
-            device=self.device
-        ).unsqueeze(0)
+        if evidence:
+            evidence_text = evidence
+        else:
+            evidence_text = "(no evidence retrieved yet)"
 
-        with torch.no_grad():
+        return question_text, evidence_text
 
-            q = self.model(x)[0]
+    
 
-        q_stop = float(q[0])
-        q_continue = float(q[1])
+    @torch.no_grad()
+    def predict_q_values(
+        self,
+        question,
+        options,
+        evidence
+    ):
+
+        question_text, evidence_text = (
+            self.build_state(
+                question,
+                options,
+                evidence
+            )
+        )
+
+        encoded = self.tokenizer(
+            question_text,
+            evidence_text,
+            truncation=True,
+            max_length=self.max_length,
+            padding=True,
+            return_tensors="pt"
+        )
+
+        encoded = {
+            key: value.to(
+                self.device
+            )
+            for key, value in encoded.items()
+        }
+
+        q_stop, q_continue = self.model(
+            input_ids=encoded["input_ids"],
+            attention_mask=encoded["attention_mask"],
+            token_type_ids=encoded.get("token_type_ids", None),
+        )
+
+        return {
+            "q_stop":
+                float(
+                    q_stop.item()
+                ),
+
+            "q_continue":
+                float(
+                    q_continue.item()
+                )
+        }
+
+    
+    @torch.no_grad()
+    def decide(
+        self,
+        question,
+        options,
+        evidence
+    ):
+        q_values = self.predict_q_values(
+            question=question,
+            options=options,
+            evidence=evidence
+        )
+
+        q_stop = q_values["q_stop"]
+        q_continue = q_values["q_continue"]
 
         margin = q_stop - q_continue
 
-        if margin > self.threshold:
+        if margin > self.margin_threshold:
             action = "STOP"
         else:
             action = "CONTINUE"
@@ -244,4 +288,5 @@ class StopRAGController:
             "q_stop": q_stop,
             "q_continue": q_continue,
             "margin": margin,
+            "margin_threshold": self.margin_threshold
         }

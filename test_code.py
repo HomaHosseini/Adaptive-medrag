@@ -1,9 +1,11 @@
-
 import time
 import json
 import re
 import ast
 import os
+
+import numpy as np
+from scipy.stats import ttest_rel, wilcoxon, binomtest
 
 from datasets import load_dataset
 from dotenv import load_dotenv
@@ -11,53 +13,83 @@ from dotenv import load_dotenv
 from src.medrag import MedRAG
 from src.adapt_medrag import AdaptiveMedRAG
 
-# os.environ["ARVAN_API_KEY"] = "d60b8d53-5f6c-5eb6-828a-031d503221d7"
-# os.environ["ARVAN_ENDPOINT"] = "https://arvancloudai.ir/gateway/models/Llama-3.3-70B-Instruct-R1AI/wXwicG2w6RhESLlIg7KlsetpzCShAX1k0bXHGZLX9nDHLxr4mJwXDMW-2Vunju0LPAXGRBNA8Hg4NhbIgiU-6UwAscgx9QDw1vINQTl1636Buf89X2lEaj3jhmNVJ9Q5qjRgH_G-9CxWta0kJqLV_LtR3XQypA0QnGRFDXtMfKtcE4Q0w5zta-2-Ul-b1rMjyoCaLU2oe4h7NM8-23TJZsUjYp9JrcetdbTBdzh2TDjNK1Iy0I10_c_8RQIN0B9LAEWZihx5ela0-k8AEHGCTwvU5zqzRXjNpwAdEQ/v1"
-# #os.environ["ARVAN_ENDPOINT"] = "https://api.arvancloudai.ir/v1/"
-
 
 load_dotenv()
 
-api_key = os.getenv("ARVAN_API_KEY")
-endpoint = os.getenv("ARVAN_ENDPOINT")
 
-# ============================================================
-# 1. PARSE MODEL ANSWER
-# ============================================================
+
+NUM_SAMPLES = 1
+
+START_INDEX = 585
+
+N_RUNS = 1
+
+#MODEL_NAME = (
+#    "chabokan/gpt-4o-mini"
+#)
+
+MODEL_NAME = "ArvanCloud/GPT-4o-mini"
+
+RETRIEVER_NAME = "MedCPT"
+
+CORPUS_NAME = "Textbooks"
+
+K = 10
+
+SEED = 42
+
+STANDARD_ROUNDS = 3
+
+STANDARD_QUERIES_PER_ROUND = 2
+
+ADAPTIVE_MAX_ITERATIONS = 3
+
+ADAPTIVE_INITIAL_QUERIES = 2
+
+CONFIDENCE_THRESHOLD = 85
+
+STOP_RAG_CHECKPOINT = (
+    "./stop_rag_ckpt/"
+    "best_stop_rag_qnetwork.pt"
+)
+
+STOP_RAG_MODEL = (
+    "michiyasunaga/BioLinkBERT-base"
+)
+
+STOP_RAG_MAX_LENGTH = 512
+
+OUTPUT_FILE = (
+    "experiment_results_test_repair_514q.json"
+)
+
+
 
 def parse_predicted_letter(raw_answer):
+    """
+    Robustly extract A-F from the final model response.
+    """
 
     if raw_answer is None:
         return "UNKNOWN"
 
     text = str(raw_answer).strip()
 
-    # --------------------------------------------------------
-    # Remove markdown code fences
-    # --------------------------------------------------------
+
 
     text = re.sub(
-        r"^```json\s*",
+        r"^\s*```(?:json)?\s*",
         "",
         text,
         flags=re.IGNORECASE
     )
 
     text = re.sub(
-        r"^```\s*",
-        "",
-        text
-    )
-
-    text = re.sub(
-        r"\s*```$",
+        r"\s*```\s*$",
         "",
         text
     ).strip()
 
-    # --------------------------------------------------------
-    # 1. JSON
-    # --------------------------------------------------------
 
     try:
 
@@ -73,7 +105,7 @@ def parse_predicted_letter(raw_answer):
             ).strip().upper()
 
             match = re.match(
-                r"^([A-F])(?:[\.\)\:\s]|$)",
+                r"^([A-F])(?:[\.\)\:\s*]|$)",
                 value
             )
 
@@ -86,10 +118,6 @@ def parse_predicted_letter(raw_answer):
         ValueError
     ):
         pass
-
-    # --------------------------------------------------------
-    # 2. Python dictionary
-    # --------------------------------------------------------
 
     try:
 
@@ -105,7 +133,7 @@ def parse_predicted_letter(raw_answer):
             ).strip().upper()
 
             match = re.match(
-                r"^([A-F])(?:[\.\)\:\s]|$)",
+                r"^([A-F])(?:[\.\)\:\s*]|$)",
                 value
             )
 
@@ -118,12 +146,10 @@ def parse_predicted_letter(raw_answer):
     ):
         pass
 
-    # --------------------------------------------------------
-    # 3. Natural language
-    # --------------------------------------------------------
 
     match = re.search(
-        r"\b(?:answer|correct answer)\s*(?:is|:)\s*([A-F])\b",
+        r"\b(?:answer|correct answer)\s*"
+        r"(?:is|:)\s*([A-F])\b",
         text,
         re.IGNORECASE
     )
@@ -131,9 +157,6 @@ def parse_predicted_letter(raw_answer):
     if match:
         return match.group(1).upper()
 
-    # --------------------------------------------------------
-    # 4. A. Option
-    # --------------------------------------------------------
 
     match = re.search(
         r"(?m)^\s*([A-F])[\.\)\:]\s*",
@@ -144,9 +167,6 @@ def parse_predicted_letter(raw_answer):
     if match:
         return match.group(1).upper()
 
-    # --------------------------------------------------------
-    # 5. Just A
-    # --------------------------------------------------------
 
     match = re.fullmatch(
         r"\s*([A-F])\s*",
@@ -160,29 +180,32 @@ def parse_predicted_letter(raw_answer):
     return "UNKNOWN"
 
 
-# ============================================================
-# 2. LOAD MEDQA
-# ============================================================
 
-def load_medqa_subset(num_samples=50):
-
+def load_medqa_subset(
+    num_samples=50
+):
     print(
         f"Loading {num_samples} MedQA questions..."
     )
 
     dataset = load_dataset(
-        "TsinghuaC3I/MedXpertQA","Text",
-        split="test"
+        "GBaker/MedQA-USMLE-4-options",
+        split="train"
+    )
+
+    dataset = dataset.shuffle(
+        seed=SEED
     )
 
     subset = dataset.select(
-        range(num_samples)
+        range(START_INDEX, num_samples+START_INDEX)
     )
+
+
 
     return [
         {
-            "id":
-                f"MedQA_{i + 1}",
+            "id": f"MedQA_{START_INDEX+ i + 1}",
 
             "question":
                 item["question"],
@@ -191,15 +214,13 @@ def load_medqa_subset(num_samples=50):
                 item["options"],
 
             "ground_truth":
-                item["label"]
+                item["answer_idx"]
         }
         for i, item in enumerate(subset)
     ]
 
 
-# ============================================================
-# 3. STANDARD i-MedRAG BENCHMARK
-# ============================================================
+
 
 def run_standard_benchmark(
     dataset,
@@ -223,6 +244,7 @@ def run_standard_benchmark(
     total_prompt_tokens = 0
     total_completion_tokens = 0
     total_tokens = 0
+
     total_latency = 0.0
 
     print("\n")
@@ -236,7 +258,8 @@ def run_standard_benchmark(
         print("-" * 100)
 
         print(
-            f"Evaluating {item['id']} | STANDARD"
+            f"Evaluating "
+            f"{item['id']} | STANDARD"
         )
 
         print("-" * 100)
@@ -245,25 +268,21 @@ def run_standard_benchmark(
 
         try:
 
-            # ------------------------------------------------
-            # Current standard return:
-            #
-            # answer, messages, metrics
-            # ------------------------------------------------
+            (
+                raw_answer,
+                history,
+                metrics
+            ) = medrag_runner.i_medrag_answer(
+                question=item["question"],
+                options=item["options"],
+                k=k,
+                n_rounds=fixed_rounds,
+                n_queries=n_queries,
+            )
 
-            raw_answer, history, metrics = (
-                medrag_runner.i_medrag_answer(
-
-                    question=item["question"],
-
-                    options=item["options"],
-
-                    k=k,
-
-                    n_rounds=fixed_rounds,
-
-                    n_queries=n_queries
-                )
+            latency_seconds = (
+                time.perf_counter()
+                - question_start
             )
 
             predicted = parse_predicted_letter(
@@ -279,15 +298,7 @@ def run_standard_benchmark(
                 correct += 1
 
             question_queries = (
-                fixed_rounds
-                *
-                n_queries
-            )
-
-            latency_seconds = metrics.get(
-                "latency_seconds",
-                time.perf_counter()
-                - question_start
+                fixed_rounds * n_queries
             )
 
             llm_calls = metrics.get(
@@ -310,21 +321,15 @@ def run_standard_benchmark(
                 0
             )
 
-            total_iterations += (
-                fixed_rounds
-            )
+            total_iterations += fixed_rounds
 
-            total_queries += (
-                question_queries
-            )
+            total_queries += question_queries
 
             total_successful_retrievals += (
                 question_queries
             )
 
-            total_llm_calls += (
-                llm_calls
-            )
+            total_llm_calls += llm_calls
 
             total_prompt_tokens += (
                 prompt_tokens
@@ -338,21 +343,14 @@ def run_standard_benchmark(
                 total_question_tokens
             )
 
-            total_latency += (
-                latency_seconds
-            )
+            total_latency += latency_seconds
 
             result = {
-
                 "id":
                     item["id"],
 
                 "configuration":
                     "standard",
-
-                # -----------------------------
-                # Question
-                # -----------------------------
 
                 "question":
                     item["question"],
@@ -363,10 +361,6 @@ def run_standard_benchmark(
                 "expected":
                     item["ground_truth"],
 
-                # -----------------------------
-                # Answer
-                # -----------------------------
-
                 "predicted":
                     predicted,
 
@@ -375,10 +369,6 @@ def run_standard_benchmark(
 
                 "raw_answer":
                     raw_answer,
-
-                # -----------------------------
-                # Retrieval
-                # -----------------------------
 
                 "iterations":
                     fixed_rounds,
@@ -395,10 +385,6 @@ def run_standard_benchmark(
                 "failed_retrievals":
                     0,
 
-                # -----------------------------
-                # LLM metrics
-                # -----------------------------
-
                 "llm_calls":
                     llm_calls,
 
@@ -414,10 +400,6 @@ def run_standard_benchmark(
                 "latency_seconds":
                     latency_seconds,
 
-                # -----------------------------
-                # Full model history
-                # -----------------------------
-
                 "history":
                     history
             }
@@ -430,7 +412,6 @@ def run_standard_benchmark(
             )
 
             result = {
-
                 "id":
                     item["id"],
 
@@ -532,13 +513,7 @@ def run_standard_benchmark(
                 latency_seconds
             )
 
-        results.append(
-            result
-        )
-
-        # ====================================================
-        # PRINT QUESTION
-        # ====================================================
+        results.append(result)
 
         print(
             f"\nPredicted: "
@@ -571,16 +546,6 @@ def run_standard_benchmark(
         )
 
         print(
-            f"Prompt tokens: "
-            f"{result['prompt_tokens']}"
-        )
-
-        print(
-            f"Completion tokens: "
-            f"{result['completion_tokens']}"
-        )
-
-        print(
             f"Total tokens: "
             f"{result['total_tokens']}"
         )
@@ -589,10 +554,6 @@ def run_standard_benchmark(
             f"Latency: "
             f"{result['latency_seconds']:.2f}s"
         )
-
-    # ========================================================
-    # AGGREGATE
-    # ========================================================
 
     n = len(dataset)
 
@@ -688,10 +649,6 @@ def run_standard_benchmark(
             results
     }
 
-    # ========================================================
-    # SUMMARY
-    # ========================================================
-
     print("\n")
     print("=" * 100)
     print("STANDARD SUMMARY")
@@ -743,32 +700,21 @@ def run_standard_benchmark(
     return summary
 
 
-# ============================================================
-# 4. ADAPTIVE BENCHMARK
-# ============================================================
 
 def run_adaptive_benchmark(
     dataset,
     medrag_runner,
     config_name="confidence",
-
     use_planner=False,
     use_planner_budget=False,
-
     use_coverage=False,
     use_novelty=True,
-
     use_options_in_gate=True,
-
     gate_features=None,
-
     query_budget_mode="confidence",
-
     max_iterations=3,
     initial_queries=2,
-
     confidence_threshold=85,
-
     k=10
 ):
 
@@ -786,16 +732,15 @@ def run_adaptive_benchmark(
     total_prompt_tokens = 0
     total_completion_tokens = 0
     total_tokens = 0
+
     total_latency = 0.0
 
     print("\n")
     print("=" * 100)
-
     print(
         f"CONFIGURATION: "
         f"{config_name}"
     )
-
     print("=" * 100)
 
     print(
@@ -828,10 +773,6 @@ def run_adaptive_benchmark(
         f"{gate_features}"
     )
 
-    # ========================================================
-    # EACH QUESTION
-    # ========================================================
-
     for item in dataset:
 
         print("\n")
@@ -861,7 +802,6 @@ def run_adaptive_benchmark(
                 evidence_history,
                 coverage_history,
                 controller_config
-
             ) = medrag_runner.adaptive_answer(
 
                 question=item["question"],
@@ -894,7 +834,8 @@ def run_adaptive_benchmark(
                     gate_features,
 
                 query_budget_mode=
-                    query_budget_mode
+                    query_budget_mode,
+
             )
 
             latency_seconds = (
@@ -913,10 +854,6 @@ def run_adaptive_benchmark(
 
             if is_correct:
                 correct += 1
-
-            # ------------------------------------------------
-            # Controller histories
-            # ------------------------------------------------
 
             confidence_history = (
                 controller_config.get(
@@ -946,9 +883,33 @@ def run_adaptive_benchmark(
                 )
             )
 
-            # ------------------------------------------------
-            # LLM metrics
-            # ------------------------------------------------
+            pre_retrieval_confidence = (
+                controller_config.get(
+                    "pre_retrieval_confidence",
+                    None
+                )
+            )
+
+            pre_retrieval_answerable = (
+                controller_config.get(
+                    "pre_retrieval_answerable",
+                    None
+                )
+            )
+
+            pre_retrieval_discrimination = (
+                controller_config.get(
+                    "pre_retrieval_discrimination",
+                    None
+                )
+            )
+
+            pre_retrieval_stopped = (
+                controller_config.get(
+                    "pre_retrieval_stopped",
+                    False
+                )
+            )
 
             llm_calls = (
                 controller_config.get(
@@ -978,17 +939,9 @@ def run_adaptive_benchmark(
                 )
             )
 
-            # ------------------------------------------------
-            # Aggregate
-            # ------------------------------------------------
+            total_iterations += iterations
 
-            total_iterations += (
-                iterations
-            )
-
-            total_queries += (
-                queries_generated
-            )
+            total_queries += queries_generated
 
             total_successful_retrievals += (
                 successful_retrievals
@@ -998,29 +951,17 @@ def run_adaptive_benchmark(
                 failed_retrievals
             )
 
-            total_llm_calls += (
-                llm_calls
-            )
+            total_llm_calls += llm_calls
 
-            total_prompt_tokens += (
-                prompt_tokens
-            )
+            total_prompt_tokens += prompt_tokens
 
             total_completion_tokens += (
                 completion_tokens
             )
 
-            total_tokens += (
-                total_question_tokens
-            )
+            total_tokens += total_question_tokens
 
-            total_latency += (
-                latency_seconds
-            )
-
-            # ------------------------------------------------
-            # Result
-            # ------------------------------------------------
+            total_latency += latency_seconds
 
             result = {
 
@@ -1029,10 +970,6 @@ def run_adaptive_benchmark(
 
                 "configuration":
                     config_name,
-
-                # -----------------------------
-                # Question
-                # -----------------------------
 
                 "question":
                     item["question"],
@@ -1043,10 +980,6 @@ def run_adaptive_benchmark(
                 "expected":
                     item["ground_truth"],
 
-                # -----------------------------
-                # Answer
-                # -----------------------------
-
                 "predicted":
                     predicted,
 
@@ -1055,10 +988,6 @@ def run_adaptive_benchmark(
 
                 "raw_answer":
                     raw_answer,
-
-                # -----------------------------
-                # Adaptive behavior
-                # -----------------------------
 
                 "iterations":
                     iterations,
@@ -1078,6 +1007,18 @@ def run_adaptive_benchmark(
                 "gate_reasoning_history":
                     gate_reasoning_history,
 
+                "pre_retrieval_confidence":
+                    pre_retrieval_confidence,
+
+                "pre_retrieval_answerable":
+                    pre_retrieval_answerable,
+
+                "pre_retrieval_discrimination":
+                    pre_retrieval_discrimination,
+
+                "pre_retrieval_stopped":
+                    pre_retrieval_stopped,
+
                 "query_budget_history":
                     query_budget_history,
 
@@ -1089,10 +1030,6 @@ def run_adaptive_benchmark(
 
                 "failed_retrievals":
                     failed_retrievals,
-
-                # -----------------------------
-                # Configuration
-                # -----------------------------
 
                 "use_planner":
                     use_planner,
@@ -1115,26 +1052,14 @@ def run_adaptive_benchmark(
                 "query_budget_mode":
                     query_budget_mode,
 
-                # -----------------------------
-                # Evidence
-                # -----------------------------
-
                 "evidence_history":
                     evidence_history,
 
                 "coverage_history":
                     coverage_history,
 
-                # -----------------------------
-                # Controller
-                # -----------------------------
-
                 "controller_config":
                     controller_config,
-
-                # -----------------------------
-                # LLM metrics
-                # -----------------------------
 
                 "llm_calls":
                     llm_calls,
@@ -1150,10 +1075,6 @@ def run_adaptive_benchmark(
 
                 "latency_seconds":
                     latency_seconds,
-
-                # -----------------------------
-                # Full history
-                # -----------------------------
 
                 "history":
                     history
@@ -1199,7 +1120,7 @@ def run_adaptive_benchmark(
                     0,
 
                 "confidence":
-                    0.0,
+                    None,
 
                 "confidence_history":
                     [],
@@ -1212,6 +1133,18 @@ def run_adaptive_benchmark(
 
                 "gate_reasoning_history":
                     [],
+
+                "pre_retrieval_confidence":
+                    None,
+
+                "pre_retrieval_answerable":
+                    None,
+
+                "pre_retrieval_discrimination":
+                    None,
+
+                "pre_retrieval_stopped":
+                    False,
 
                 "query_budget_history":
                     [],
@@ -1290,9 +1223,7 @@ def run_adaptive_benchmark(
                     []
             }
 
-            total_llm_calls += (
-                result["llm_calls"]
-            )
+            total_llm_calls += result["llm_calls"]
 
             total_prompt_tokens += (
                 result["prompt_tokens"]
@@ -1302,21 +1233,11 @@ def run_adaptive_benchmark(
                 result["completion_tokens"]
             )
 
-            total_tokens += (
-                result["total_tokens"]
-            )
+            total_tokens += result["total_tokens"]
 
-            total_latency += (
-                latency_seconds
-            )
+            total_latency += latency_seconds
 
-        results.append(
-            result
-        )
-
-        # ====================================================
-        # PRINT
-        # ====================================================
+        results.append(result)
 
         print(
             f"\nPredicted: "
@@ -1369,6 +1290,16 @@ def run_adaptive_benchmark(
         )
 
         print(
+            f"Pre-retrieval confidence: "
+            f"{result['pre_retrieval_confidence']}"
+        )
+
+        print(
+            f"Pre-retrieval stopped: "
+            f"{result['pre_retrieval_stopped']}"
+        )
+
+        print(
             f"LLM calls: "
             f"{result['llm_calls']}"
         )
@@ -1382,10 +1313,6 @@ def run_adaptive_benchmark(
             f"Latency: "
             f"{result['latency_seconds']:.2f}s"
         )
-
-    # ========================================================
-    # AGGREGATE
-    # ========================================================
 
     n = len(dataset)
 
@@ -1481,10 +1408,6 @@ def run_adaptive_benchmark(
             results
     }
 
-    # ========================================================
-    # SUMMARY
-    # ========================================================
-
     print("\n")
     print("=" * 100)
 
@@ -1541,381 +1464,538 @@ def run_adaptive_benchmark(
     return summary
 
 
-# ============================================================
-# 5. QUESTION-LEVEL COMPARISON
-# ============================================================
 
-def build_question_comparison(
-    standard_result,
-    adaptive_result
+
+def run_trained_stop_rag_benchmark(
+    dataset,
+    medrag_runner,
+    max_iterations=3,
+    initial_queries=2,
+    k=10
 ):
 
-    standard_by_id = {
-        item["id"]: item
-        for item in
-        standard_result["results"]
-    }
+    results = []
 
-    adaptive_by_id = {
-        item["id"]: item
-        for item in
-        adaptive_result["results"]
-    }
+    correct = 0
 
-    comparison = []
+    total_iterations = 0
+    total_queries = 0
 
-    common_ids = sorted(
-        set(
-            standard_by_id.keys()
-        )
-        &
-        set(
-            adaptive_by_id.keys()
-        )
+    total_successful_retrievals = 0
+    total_failed_retrievals = 0
+
+    total_llm_calls = 0
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+    total_tokens = 0
+
+    total_latency = 0.0
+
+    print("\n")
+    print("=" * 110)
+    print(
+        "LEARNED STOP-RAG BENCHMARK"
     )
+    print("=" * 110)
 
-    for qid in common_ids:
+    for item in dataset:
 
-        standard = (
-            standard_by_id[qid]
+        print("\n")
+        print("-" * 110)
+
+        print(
+            f"Evaluating "
+            f"{item['id']} | "
+            f"LEARNED STOP-RAG"
         )
 
-        adaptive = (
-            adaptive_by_id[qid]
-        )
+        print("-" * 110)
 
-        comparison.append({
+        question_start = time.perf_counter()
 
-            # --------------------------
-            # Identity
-            # --------------------------
+        try:
 
-            "id":
-                qid,
+            (
+                raw_answer,
+                history,
+                iterations,
+                query_budget_history,
+                queries_generated,
+                successful_retrievals,
+                failed_retrievals,
+                q_history,
+                controller_config
+            ) = medrag_runner.learned_stop_rag_answer(
 
-            "ground_truth":
-                standard["expected"],
+                question=item["question"],
 
-            # --------------------------
-            # Answers
-            # --------------------------
+                options=item["options"],
 
-            "standard_prediction":
-                standard["predicted"],
+                k=k,
 
-            "standard_correct":
-                standard["correct"],
+                max_iterations=max_iterations,
 
-            "adaptive_prediction":
-                adaptive["predicted"],
+                initial_queries=initial_queries,
 
-            "adaptive_correct":
-                adaptive["correct"],
 
-            # --------------------------
-            # Outcome
-            # --------------------------
+            )
 
-            "both_correct":
-                (
-                    standard["correct"]
-                    and
-                    adaptive["correct"]
-                ),
+            latency_seconds = (
+                time.perf_counter()
+                - question_start
+            )
 
-            "both_wrong":
-                (
-                    not standard["correct"]
-                    and
-                    not adaptive["correct"]
-                ),
+            predicted = parse_predicted_letter(
+                raw_answer
+            )
 
-            "adaptive_improved":
-                (
-                    not standard["correct"]
-                    and
-                    adaptive["correct"]
-                ),
+            is_correct = (
+                predicted
+                == item["ground_truth"]
+            )
 
-            "adaptive_hurt":
-                (
-                    standard["correct"]
-                    and
-                    not adaptive["correct"]
-                ),
+            if is_correct:
+                correct += 1
 
-            "same_prediction":
-                (
-                    standard["predicted"]
-                    ==
-                    adaptive["predicted"]
-                ),
-
-            # --------------------------
-            # Standard efficiency
-            # --------------------------
-
-            "standard_iterations":
-                standard["iterations"],
-
-            "standard_queries":
-                standard["queries_generated"],
-
-            "standard_llm_calls":
-                standard["llm_calls"],
-
-            "standard_prompt_tokens":
-                standard["prompt_tokens"],
-
-            "standard_completion_tokens":
-                standard["completion_tokens"],
-
-            "standard_total_tokens":
-                standard["total_tokens"],
-
-            "standard_latency_seconds":
-                standard["latency_seconds"],
-
-            # --------------------------
-            # Adaptive efficiency
-            # --------------------------
-
-            "adaptive_iterations":
-                adaptive["iterations"],
-
-            "adaptive_queries":
-                adaptive["queries_generated"],
-
-            "adaptive_llm_calls":
-                adaptive["llm_calls"],
-
-            "adaptive_prompt_tokens":
-                adaptive["prompt_tokens"],
-
-            "adaptive_completion_tokens":
-                adaptive["completion_tokens"],
-
-            "adaptive_total_tokens":
-                adaptive["total_tokens"],
-
-            "adaptive_latency_seconds":
-                adaptive["latency_seconds"],
-
-            # --------------------------
-            # Controller behavior
-            # --------------------------
-
-            "confidence_history":
-                adaptive.get(
-                    "confidence_history",
-                    []
-                ),
-
-            "novelty_history":
-                adaptive.get(
-                    "novelty_history",
-                    []
-                ),
-
-            "discrimination_history":
-                adaptive.get(
-                    "discrimination_history",
-                    []
-                ),
-
-            "query_budget_history":
-                adaptive.get(
-                    "query_budget_history",
-                    []
-                ),
-
-            "gate_reasoning_history":
-                adaptive.get(
-                    "gate_reasoning_history",
-                    []
+            llm_calls = (
+                controller_config.get(
+                    "llm_calls",
+                    0
                 )
-        })
+            )
 
-    return comparison
+            prompt_tokens = (
+                controller_config.get(
+                    "prompt_tokens",
+                    0
+                )
+            )
+
+            completion_tokens = (
+                controller_config.get(
+                    "completion_tokens",
+                    0
+                )
+            )
+
+            total_question_tokens = (
+                controller_config.get(
+                    "total_tokens",
+                    0
+                )
+            )
+
+            total_iterations += iterations
+
+            total_queries += queries_generated
+
+            total_successful_retrievals += (
+                successful_retrievals
+            )
+
+            total_failed_retrievals += (
+                failed_retrievals
+            )
+
+            total_llm_calls += llm_calls
+
+            total_prompt_tokens += prompt_tokens
+
+            total_completion_tokens += (
+                completion_tokens
+            )
+
+            total_tokens += (
+                total_question_tokens
+            )
+
+            total_latency += latency_seconds
+
+            result = {
+
+                "id":
+                    item["id"],
+
+                "configuration":
+                    "trained_stop_rag",
+
+                "question":
+                    item["question"],
+
+                "options":
+                    item["options"],
+
+                "expected":
+                    item["ground_truth"],
+
+                "predicted":
+                    predicted,
+
+                "correct":
+                    is_correct,
+
+                "raw_answer":
+                    raw_answer,
+
+                "iterations":
+                    iterations,
+
+                "query_budget_history":
+                    query_budget_history,
+
+                "queries_generated":
+                    queries_generated,
+
+                "successful_retrievals":
+                    successful_retrievals,
+
+                "failed_retrievals":
+                    failed_retrievals,
+
+                "q_history":
+                    q_history,
+
+                "controller_config":
+                    controller_config,
+
+                "llm_calls":
+                    llm_calls,
+
+                "prompt_tokens":
+                    prompt_tokens,
+
+                "completion_tokens":
+                    completion_tokens,
+
+                "total_tokens":
+                    total_question_tokens,
+
+                "latency_seconds":
+                    latency_seconds,
+
+                "history":
+                    history
+            }
+
+        except Exception as e:
+
+            latency_seconds = (
+                time.perf_counter()
+                - question_start
+            )
+
+            result = {
+
+                "id":
+                    item["id"],
+
+                "configuration":
+                    "trained_stop_rag",
+
+                "question":
+                    item["question"],
+
+                "options":
+                    item["options"],
+
+                "expected":
+                    item["ground_truth"],
+
+                "predicted":
+                    "ERROR",
+
+                "correct":
+                    False,
+
+                "raw_answer":
+                    None,
+
+                "error":
+                    str(e),
+
+                "iterations":
+                    0,
+
+                "query_budget_history":
+                    [],
+
+                "queries_generated":
+                    0,
+
+                "successful_retrievals":
+                    0,
+
+                "failed_retrievals":
+                    0,
+
+                "q_history":
+                    [],
+
+                "controller_config":
+                    {},
+
+                "llm_calls":
+                    getattr(
+                        medrag_runner,
+                        "llm_call_count",
+                        0
+                    ),
+
+                "prompt_tokens":
+                    getattr(
+                        medrag_runner,
+                        "prompt_tokens",
+                        0
+                    ),
+
+                "completion_tokens":
+                    getattr(
+                        medrag_runner,
+                        "completion_tokens",
+                        0
+                    ),
+
+                "total_tokens":
+                    getattr(
+                        medrag_runner,
+                        "total_tokens",
+                        0
+                    ),
+
+                "latency_seconds":
+                    latency_seconds,
+
+                "history":
+                    []
+            }
+
+            total_llm_calls += (
+                result["llm_calls"]
+            )
+
+            total_prompt_tokens += (
+                result["prompt_tokens"]
+            )
+
+            total_completion_tokens += (
+                result["completion_tokens"]
+            )
+
+            total_tokens += (
+                result["total_tokens"]
+            )
+
+            total_latency += (
+                latency_seconds
+            )
+
+        results.append(result)
+
+        print(
+            f"\nPredicted: "
+            f"{result['predicted']}"
+        )
+
+        print(
+            f"Expected: "
+            f"{result['expected']}"
+        )
+
+        print(
+            f"Correct: "
+            f"{result['correct']}"
+        )
+
+        print(
+            f"Iterations: "
+            f"{result['iterations']}"
+        )
+
+        print(
+            f"Queries: "
+            f"{result['queries_generated']}"
+        )
+
+        print(
+            f"Successful retrievals: "
+            f"{result['successful_retrievals']}"
+        )
+
+        print(
+            f"LLM calls: "
+            f"{result['llm_calls']}"
+        )
+
+        print(
+            f"Total tokens: "
+            f"{result['total_tokens']}"
+        )
+
+        print(
+            f"Latency: "
+            f"{result['latency_seconds']:.2f}s"
+        )
+
+    n = len(dataset)
+
+    summary = {
+
+        "configuration":
+            "trained_stop_rag",
+
+        "accuracy":
+            correct / n * 100
+            if n > 0
+            else 0.0,
+
+        "correct":
+            correct,
+
+        "total_questions":
+            n,
+
+        "avg_iterations":
+            total_iterations / n
+            if n > 0
+            else 0.0,
+
+        "total_iterations":
+            total_iterations,
+
+        "avg_queries":
+            total_queries / n
+            if n > 0
+            else 0.0,
+
+        "total_queries":
+            total_queries,
+
+        "avg_successful_retrievals":
+            total_successful_retrievals / n
+            if n > 0
+            else 0.0,
+
+        "total_successful_retrievals":
+            total_successful_retrievals,
+
+        "avg_failed_retrievals":
+            total_failed_retrievals / n
+            if n > 0
+            else 0.0,
+
+        "total_failed_retrievals":
+            total_failed_retrievals,
+
+        "avg_llm_calls":
+            total_llm_calls / n
+            if n > 0
+            else 0.0,
+
+        "total_llm_calls":
+            total_llm_calls,
+
+        "avg_prompt_tokens":
+            total_prompt_tokens / n
+            if n > 0
+            else 0.0,
+
+        "total_prompt_tokens":
+            total_prompt_tokens,
+
+        "avg_completion_tokens":
+            total_completion_tokens / n
+            if n > 0
+            else 0.0,
+
+        "total_completion_tokens":
+            total_completion_tokens,
+
+        "avg_total_tokens":
+            total_tokens / n
+            if n > 0
+            else 0.0,
+
+        "total_tokens":
+            total_tokens,
+
+        "avg_latency_seconds":
+            total_latency / n
+            if n > 0
+            else 0.0,
+
+        "total_latency_seconds":
+            total_latency,
+
+        "results":
+            results
+    }
+
+    print("\n")
+    print("=" * 110)
+    print(
+        "LEARNED STOP-RAG SUMMARY"
+    )
+    print("=" * 110)
+
+    print(
+        f"Accuracy: "
+        f"{summary['accuracy']:.2f}% "
+        f"({correct}/{n})"
+    )
+
+    print(
+        f"Average iterations: "
+        f"{summary['avg_iterations']:.2f}"
+    )
+
+    print(
+        f"Average queries: "
+        f"{summary['avg_queries']:.2f}"
+    )
+
+    print(
+        f"Average LLM calls: "
+        f"{summary['avg_llm_calls']:.2f}"
+    )
+
+    print(
+        f"Average total tokens: "
+        f"{summary['avg_total_tokens']:.2f}"
+    )
+
+    print(
+        f"Average latency: "
+        f"{summary['avg_latency_seconds']:.2f}s"
+    )
+
+    print("=" * 110)
+
+    return summary
 
 
-# ============================================================
-# 6. AGGREGATE COMPARISON
-# ============================================================
 
-def build_summary_comparison(
+
+def print_three_way_comparison(
     standard_result,
-    adaptive_result
+    confidence_result,
+    trained_result
 ):
-
-    metrics = [
-
-        "accuracy",
-        "avg_iterations",
-        "avg_queries",
-        "avg_llm_calls",
-        "avg_prompt_tokens",
-        "avg_completion_tokens",
-        "avg_total_tokens",
-        "avg_latency_seconds"
-    ]
-
-    comparison = {}
-
-    for metric in metrics:
-
-        standard_value = (
-            standard_result[metric]
-        )
-
-        adaptive_value = (
-            adaptive_result[metric]
-        )
-
-        comparison[metric] = {
-
-            "standard":
-                standard_value,
-
-            "adaptive":
-                adaptive_value,
-
-            "adaptive_minus_standard":
-                adaptive_value - standard_value
-        }
-
-    # ========================================================
-    # Reduction metrics
-    # ========================================================
-
-    standard_queries = (
-        standard_result["avg_queries"]
-    )
-
-    adaptive_queries = (
-        adaptive_result["avg_queries"]
-    )
-
-    if standard_queries > 0:
-
-        query_reduction = (
-            (
-                standard_queries
-                -
-                adaptive_queries
-            )
-            /
-            standard_queries
-            *
-            100
-        )
-
-    else:
-
-        query_reduction = 0.0
-
-    standard_tokens = (
-        standard_result["avg_total_tokens"]
-    )
-
-    adaptive_tokens = (
-        adaptive_result["avg_total_tokens"]
-    )
-
-    if standard_tokens > 0:
-
-        token_reduction = (
-            (
-                standard_tokens
-                -
-                adaptive_tokens
-            )
-            /
-            standard_tokens
-            *
-            100
-        )
-
-    else:
-
-        token_reduction = 0.0
-
-    standard_latency = (
-        standard_result[
-            "avg_latency_seconds"
-        ]
-    )
-
-    adaptive_latency = (
-        adaptive_result[
-            "avg_latency_seconds"
-        ]
-    )
-
-    if standard_latency > 0:
-
-        latency_reduction = (
-            (
-                standard_latency
-                -
-                adaptive_latency
-            )
-            /
-            standard_latency
-            *
-            100
-        )
-
-    else:
-
-        latency_reduction = 0.0
-
-    comparison[
-        "query_reduction_percent"
-    ] = query_reduction
-
-    comparison[
-        "token_reduction_percent"
-    ] = token_reduction
-
-    comparison[
-        "latency_reduction_percent"
-    ] = latency_reduction
-
-    return comparison
-
-
-# ============================================================
-# 7. PRINT COMPARISON
-# ============================================================
-
-def print_summary_comparison(
-    standard_result,
-    adaptive_result
-):
-
-    comparison = build_summary_comparison(
-        standard_result,
-        adaptive_result
-    )
 
     print("\n")
     print("=" * 115)
-    print(
-        "STANDARD vs CONFIDENCE-ADAPTIVE"
-    )
+    print("THREE-WAY COMPARISON")
     print("=" * 115)
 
     print(
         f"{'Metric':<35}"
         f"{'Standard':<20}"
-        f"{'Adaptive':<20}"
-        f"{'Adaptive - Standard':<25}"
+        f"{'Confidence':<20}"
+        f"{'Learned Stop-RAG':<25}"
     )
 
     print("-" * 115)
 
-    rows = [
+    metrics = [
 
         (
             "Accuracy (%)",
@@ -1958,612 +2038,1113 @@ def print_summary_comparison(
         )
     ]
 
-    for label, key in rows:
+    for label, key in metrics:
 
         print(
-
             f"{label:<35}"
-
-            f"{comparison[key]['standard']:<20.2f}"
-
-            f"{comparison[key]['adaptive']:<20.2f}"
-
-            f"{comparison[key]['adaptive_minus_standard']:<25.2f}"
+            f"{standard_result[key]:<20.2f}"
+            f"{confidence_result[key]:<20.2f}"
+            f"{trained_result[key]:<25.2f}"
         )
-
-    print("-" * 115)
-
-    print(
-        f"{'Query reduction (%)':<35}"
-        f"{'':<20}"
-        f"{'':<20}"
-        f"{comparison['query_reduction_percent']:<25.2f}"
-    )
-
-    print(
-        f"{'Token reduction (%)':<35}"
-        f"{'':<20}"
-        f"{'':<20}"
-        f"{comparison['token_reduction_percent']:<25.2f}"
-    )
-
-    print(
-        f"{'Latency reduction (%)':<35}"
-        f"{'':<20}"
-        f"{'':<20}"
-        f"{comparison['latency_reduction_percent']:<25.2f}"
-    )
 
     print("=" * 115)
 
 
-# ============================================================
-# 8. PRINT QUESTION-LEVEL OUTCOMES
-# ============================================================
 
-def print_question_outcomes(
-    comparison
+
+def safe_paired_test(
+    baseline_values,
+    proposed_values
 ):
 
-    print("\n")
-    print("=" * 110)
-    print(
-        "QUESTION-LEVEL OUTCOMES"
-    )
-    print("=" * 110)
-
-    print(
-        f"{'ID':<12}"
-        f"{'GT':<6}"
-        f"{'Standard':<12}"
-        f"{'Adaptive':<12}"
-        f"{'Outcome':<20}"
-        f"{'Std Q':<8}"
-        f"{'Adp Q':<8}"
+    baseline = np.asarray(
+        baseline_values,
+        dtype=float
     )
 
-    print("-" * 110)
+    proposed = np.asarray(
+        proposed_values,
+        dtype=float
+    )
 
-    for item in comparison:
+    if len(baseline) != len(proposed):
+        raise ValueError(
+            "Paired arrays must have equal length."
+        )
 
-        if item["adaptive_improved"]:
+    if len(baseline) < 2:
+        return {
+            "t_statistic": None,
+            "p_value_ttest": None,
+            "wilcoxon_statistic": None,
+            "p_value_wilcoxon": None
+        }
 
-            outcome = (
-                "ADAPTIVE IMPROVED"
+
+    t_result = ttest_rel(
+        proposed,
+        baseline
+    )
+
+    t_statistic = (
+        None
+        if np.isnan(t_result.statistic)
+        else float(t_result.statistic)
+    )
+
+    p_value_ttest = (
+        None
+        if np.isnan(t_result.pvalue)
+        else float(t_result.pvalue)
+    )
+
+    
+
+    try:
+
+        w_result = wilcoxon(
+            proposed,
+            baseline,
+            zero_method="wilcox",
+            alternative="two-sided"
+        )
+
+        w_statistic = float(
+            w_result.statistic
+        )
+
+        p_value_wilcoxon = float(
+            w_result.pvalue
+        )
+
+    except ValueError:
+
+        w_statistic = None
+        p_value_wilcoxon = None
+
+    return {
+
+        "t_statistic":
+            t_statistic,
+
+        "p_value_ttest":
+            p_value_ttest,
+
+        "wilcoxon_statistic":
+            w_statistic,
+
+        "p_value_wilcoxon":
+            p_value_wilcoxon
+    }
+
+
+
+
+def mcnemar_accuracy_test(
+    baseline_result,
+    proposed_result
+):
+    """
+    Accuracy comparison for paired questions
+    within one run.
+
+    b01:
+        baseline correct, proposed wrong
+
+    b10:
+        baseline wrong, proposed correct
+    """
+
+    baseline = {
+        x["id"]: x
+        for x in baseline_result["results"]
+    }
+
+    proposed = {
+        x["id"]: x
+        for x in proposed_result["results"]
+    }
+
+    common_ids = (
+        set(baseline)
+        & set(proposed)
+    )
+
+    baseline_correct_proposed_wrong = 0
+    baseline_wrong_proposed_correct = 0
+
+    for qid in common_ids:
+
+        b = bool(
+            baseline[qid]["correct"]
+        )
+
+        p = bool(
+            proposed[qid]["correct"]
+        )
+
+        if b and not p:
+
+            baseline_correct_proposed_wrong += 1
+
+        elif not b and p:
+
+            baseline_wrong_proposed_correct += 1
+
+    discordant = (
+        baseline_correct_proposed_wrong
+        +
+        baseline_wrong_proposed_correct
+    )
+
+    if discordant == 0:
+
+        p_value = 1.0
+
+    else:
+
+        # Exact two-sided McNemar test
+        test = binomtest(
+            baseline_wrong_proposed_correct,
+            discordant,
+            p=0.5,
+            alternative="two-sided"
+        )
+
+        p_value = float(
+            test.pvalue
+        )
+
+    return {
+
+        "baseline_correct_proposed_wrong":
+            baseline_correct_proposed_wrong,
+
+        "baseline_wrong_proposed_correct":
+            baseline_wrong_proposed_correct,
+
+        "discordant_pairs":
+            discordant,
+
+        "p_value":
+            p_value
+    }
+
+
+
+
+def analyze_five_runs(
+    all_runs,
+    baseline_name,
+    proposed_name
+):
+    """
+    all_runs:
+
+    [
+        {
+            "standard": ...,
+            "confidence_adaptive": ...,
+            "trained_stop_rag": ...
+        },
+        ...
+    ]
+    """
+
+    metric_definitions = [
+
+        (
+            "accuracy",
+            "Accuracy"
+        ),
+
+        (
+            "avg_iterations",
+            "Iterations"
+        ),
+
+        (
+            "avg_queries",
+            "Queries"
+        ),
+
+        (
+            "avg_llm_calls",
+            "LLM calls"
+        ),
+
+        (
+            "avg_prompt_tokens",
+            "Prompt tokens"
+        ),
+
+        (
+            "avg_completion_tokens",
+            "Completion tokens"
+        ),
+
+        (
+            "avg_total_tokens",
+            "Total tokens"
+        ),
+
+        (
+            "avg_latency_seconds",
+            "Latency"
+        )
+    ]
+
+    statistics = {
+
+        "baseline":
+            baseline_name,
+
+        "proposed":
+            proposed_name,
+
+        "n_runs":
+            len(all_runs),
+
+        "metrics":
+            {},
+
+        "mcnemar_by_run":
+            []
+    }
+
+
+    for metric_key, metric_name in metric_definitions:
+
+        baseline_values = [
+            run[baseline_name][metric_key]
+            for run in all_runs
+        ]
+
+        proposed_values = [
+            run[proposed_name][metric_key]
+            for run in all_runs
+        ]
+
+        test_result = safe_paired_test(
+            baseline_values,
+            proposed_values
+        )
+
+        baseline_array = np.asarray(
+            baseline_values,
+            dtype=float
+        )
+
+        proposed_array = np.asarray(
+            proposed_values,
+            dtype=float
+        )
+
+        test_result.update({
+
+            "metric":
+                metric_name,
+
+            "metric_key":
+                metric_key,
+
+            "baseline_values":
+                [
+                    float(x)
+                    for x in baseline_values
+                ],
+
+            "proposed_values":
+                [
+                    float(x)
+                    for x in proposed_values
+                ],
+
+            "baseline_mean":
+                float(
+                    np.mean(
+                        baseline_array
+                    )
+                ),
+
+            "baseline_std":
+                float(
+                    np.std(
+                        baseline_array,
+                        ddof=1
+                    )
+                ),
+
+            "proposed_mean":
+                float(
+                    np.mean(
+                        proposed_array
+                    )
+                ),
+
+            "proposed_std":
+                float(
+                    np.std(
+                        proposed_array,
+                        ddof=1
+                    )
+                ),
+
+            "mean_difference":
+                float(
+                    np.mean(
+                        proposed_array
+                        -
+                        baseline_array
+                    )
+                )
+        })
+
+        statistics[
+            "metrics"
+        ][metric_key] = test_result
+
+
+    for run_index, run in enumerate(
+        all_runs,
+        start=1
+    ):
+
+        mcnemar_result = (
+            mcnemar_accuracy_test(
+                run[baseline_name],
+                run[proposed_name]
             )
+        )
 
-        elif item["adaptive_hurt"]:
+        mcnemar_result[
+            "run"
+        ] = run_index
 
-            outcome = (
-                "ADAPTIVE HURT"
-            )
+        statistics[
+            "mcnemar_by_run"
+        ].append(
+            mcnemar_result
+        )
 
-        elif item["both_correct"]:
+    
 
-            outcome = (
-                "BOTH CORRECT"
-            )
+    resource_metrics = [
 
-        elif item["both_wrong"]:
+        "avg_queries",
+        "avg_llm_calls",
+        "avg_prompt_tokens",
+        "avg_completion_tokens",
+        "avg_total_tokens",
+        "avg_latency_seconds"
+    ]
 
-            outcome = (
-                "BOTH WRONG"
+    reductions = {}
+
+    for metric in resource_metrics:
+
+        baseline_mean = (
+            statistics[
+                "metrics"
+            ][metric][
+                "baseline_mean"
+            ]
+        )
+
+        proposed_mean = (
+            statistics[
+                "metrics"
+            ][metric][
+                "proposed_mean"
+            ]
+        )
+
+        if baseline_mean != 0:
+
+            reduction = (
+                (
+                    baseline_mean
+                    -
+                    proposed_mean
+                )
+                /
+                baseline_mean
+                *
+                100
             )
 
         else:
 
-            outcome = "OTHER"
+            reduction = 0.0
 
-        print(
-
-            f"{item['id']:<12}"
-
-            f"{item['ground_truth']:<6}"
-
-            f"{item['standard_prediction']:<12}"
-
-            f"{item['adaptive_prediction']:<12}"
-
-            f"{outcome:<20}"
-
-            f"{item['standard_queries']:<8}"
-
-            f"{item['adaptive_queries']:<8}"
+        reductions[metric] = float(
+            reduction
         )
 
-    print("=" * 110)
+    statistics[
+        "relative_reductions_percent"
+    ] = reductions
+
+    return statistics
 
 
-# ============================================================
-# 9. EXPERIMENT SETTINGS
-# ============================================================
-
-NUM_SAMPLES = 10
-
-MODEL_NAME = (
-    "Arvan/Llama-3-3-70B-Instruct-R1AI"
-)
-
-RETRIEVER_NAME = "MedCPT"
-
-CORPUS_NAME = "Textbooks"
-
-K = 10
-
-STANDARD_ROUNDS = 3
-
-STANDARD_QUERIES_PER_ROUND = 2
-
-ADAPTIVE_MAX_ITERATIONS = 3
-
-ADAPTIVE_INITIAL_QUERIES = 2
-
-CONFIDENCE_THRESHOLD = 85
 
 
-# ============================================================
-# 10. LOAD DATA
-# ============================================================
+def print_statistical_report(
+    statistics
+):
 
-all_questions = load_medqa_subset(
-    num_samples=NUM_SAMPLES
-)
-
-medqa_batch = all_questions[:]
-
-print("\n")
-print("=" * 100)
-print("QUESTIONS USED")
-print("=" * 100)
-
-for item in medqa_batch:
+    print("\n")
+    print("=" * 125)
 
     print(
-        f"{item['id']} -> "
-        f"Ground truth: "
-        f"{item['ground_truth']}"
+        "STATISTICAL SIGNIFICANCE"
+    )
+
+    print("=" * 125)
+
+    print(
+        f"Baseline: "
+        f"{statistics['baseline']}"
+    )
+
+    print(
+        f"Proposed: "
+        f"{statistics['proposed']}"
+    )
+
+    print(
+        f"Number of runs: "
+        f"{statistics['n_runs']}"
+    )
+
+    print("\n")
+
+    print(
+        f"{'Metric':<25}"
+        f"{'Baseline Mean±SD':<25}"
+        f"{'Proposed Mean±SD':<25}"
+        f"{'Paired t-test p':<20}"
+        f"{'Wilcoxon p':<15}"
+    )
+
+    print("-" * 125)
+
+    for metric_key, result in (
+        statistics["metrics"].items()
+    ):
+
+        baseline_text = (
+            f"{result['baseline_mean']:.3f} ± "
+            f"{result['baseline_std']:.3f}"
+        )
+
+        proposed_text = (
+            f"{result['proposed_mean']:.3f} ± "
+            f"{result['proposed_std']:.3f}"
+        )
+
+        p_t = result[
+            "p_value_ttest"
+        ]
+
+        p_w = result[
+            "p_value_wilcoxon"
+        ]
+
+        p_t_text = (
+            "N/A"
+            if p_t is None
+            else f"{p_t:.5f}"
+        )
+
+        p_w_text = (
+            "N/A"
+            if p_w is None
+            else f"{p_w:.5f}"
+        )
+
+        print(
+            f"{result['metric']:<25}"
+            f"{baseline_text:<25}"
+            f"{proposed_text:<25}"
+            f"{p_t_text:<20}"
+            f"{p_w_text:<15}"
+        )
+
+    print("-" * 125)
+
+    print(
+        "\nMcNemar accuracy test "
+        "(performed separately for each run):"
+    )
+
+    for result in statistics[
+        "mcnemar_by_run"
+    ]:
+
+        print(
+            f"  Run {result['run']}: "
+            f"baseline-correct/proposed-wrong = "
+            f"{result['baseline_correct_proposed_wrong']}, "
+            f"baseline-wrong/proposed-correct = "
+            f"{result['baseline_wrong_proposed_correct']}, "
+            f"p = {result['p_value']:.5f}"
+        )
+
+    print(
+        "\nRelative resource reductions "
+        "(positive = proposed uses less):"
+    )
+
+    for metric, reduction in (
+        statistics[
+            "relative_reductions_percent"
+        ].items()
+    ):
+
+        print(
+            f"  {metric}: "
+            f"{reduction:.2f}%"
+        )
+
+    print("=" * 125)
+
+
+
+def run_one_experiment(
+    dataset,
+    standard_medrag,
+    adaptive_medrag
+):
+
+    print("\n")
+    print("=" * 120)
+    print("RUNNING STANDARD i-MedRAG")
+    print("=" * 120)
+
+    standard_result = (
+        run_standard_benchmark(
+
+            dataset=dataset,
+
+            medrag_runner=standard_medrag,
+
+            fixed_rounds=
+                STANDARD_ROUNDS,
+
+            n_queries=
+                STANDARD_QUERIES_PER_ROUND,
+
+            k=K
+        )
+    )
+
+    print("\n")
+    print("=" * 120)
+    print(
+        "RUNNING CONFIDENCE-ADAPTIVE i-MedRAG"
+    )
+    print("=" * 120)
+
+    confidence_result = (
+        run_adaptive_benchmark(
+
+            dataset=dataset,
+
+            medrag_runner=adaptive_medrag,
+
+            config_name="confidence",
+
+            use_planner=False,
+
+            use_planner_budget=False,
+
+            use_coverage=False,
+
+            use_novelty=True,
+
+            use_options_in_gate=True,
+
+            gate_features=[
+                "confidence",
+                "answerable",
+                "discrimination"
+            ],
+
+            query_budget_mode=
+                "confidence",
+
+            max_iterations=
+                ADAPTIVE_MAX_ITERATIONS,
+
+            initial_queries=
+                ADAPTIVE_INITIAL_QUERIES,
+
+            confidence_threshold=
+                CONFIDENCE_THRESHOLD,
+
+            k=K
+        )
+    )
+
+    print("\n")
+    print("=" * 120)
+    print("RUNNING LEARNED STOP-RAG")
+    print("=" * 120)
+
+    trained_result = (
+        run_trained_stop_rag_benchmark(
+
+            dataset=dataset,
+
+            medrag_runner=adaptive_medrag,
+
+            max_iterations=
+                ADAPTIVE_MAX_ITERATIONS,
+
+            initial_queries=
+                ADAPTIVE_INITIAL_QUERIES,
+
+            k=K
+        )
+    )
+
+    print_three_way_comparison(
+        standard_result,
+        confidence_result,
+        trained_result
+    )
+
+    return {
+
+        "standard":
+            standard_result,
+
+        "confidence_adaptive":
+            confidence_result,
+
+        "trained_stop_rag":
+            trained_result
+    }
+
+
+
+def save_json(
+    data,
+    filepath
+):
+
+    with open(
+        filepath,
+        "w",
+        encoding="utf-8"
+    ) as f:
+
+        json.dump(
+            data,
+            f,
+            indent=2,
+            ensure_ascii=False
+        )
+
+
+
+if __name__ == "__main__":
+
+
+    all_questions = load_medqa_subset(
+        num_samples=NUM_SAMPLES
+    )
+
+    medqa_batch = all_questions[:]
+
+    print("\n")
+    print("=" * 100)
+    print("QUESTIONS USED")
+    print("=" * 100)
+
+    for item in medqa_batch:
+
+        print(
+            f"{item['id']} -> "
+            f"Ground truth: "
+            f"{item['ground_truth']}"
+        )
+
+
+    print("\n")
+    print(
+        "Initializing STANDARD MedRAG..."
+    )
+
+    standard_medrag = MedRAG(
+
+        llm_name=MODEL_NAME,
+
+        rag=True,
+
+        follow_up=True,
+
+        retriever_name=
+            RETRIEVER_NAME,
+
+        corpus_name=
+            CORPUS_NAME,
+
+        corpus_cache=True
     )
 
 
-# ============================================================
-# 11. CREATE STANDARD MODEL
-# ============================================================
+    print("\n")
+    print(
+        "Initializing ADAPTIVE MedRAG..."
+    )
 
-standard_medrag = MedRAG(
+    adaptive_medrag = AdaptiveMedRAG(
 
-    llm_name=MODEL_NAME,
+        llm_name=MODEL_NAME,
 
-    rag=True,
+        rag=True,
 
-    follow_up=True,
+        follow_up=True,
 
-    retriever_name=RETRIEVER_NAME,
-
-    corpus_name=CORPUS_NAME,
-
-    corpus_cache=True
-)
-
-
-# ============================================================
-# 12. CREATE ADAPTIVE MODEL
-# ============================================================
-
-adaptive_medrag = AdaptiveMedRAG(
-
-    llm_name=MODEL_NAME,
-
-    rag=True,
-
-    follow_up=True,
-
-    retriever_name=RETRIEVER_NAME,
-
-    corpus_name=CORPUS_NAME,
-
-    corpus_cache=True
-)
-
-
-# ============================================================
-# 13. RUN STANDARD
-# ============================================================
-
-# print("\n")
-# print("=" * 110)
-# print(
-#     "RUNNING STANDARD i-MedRAG"
-# )
-# print("=" * 110)
-
-# standard_result = run_standard_benchmark(
-
-#     dataset=medqa_batch,
-
-#     medrag_runner=standard_medrag,
-
-#     fixed_rounds=STANDARD_ROUNDS,
-
-#     n_queries=
-#         STANDARD_QUERIES_PER_ROUND,
-
-#     k=K
-# )
-
-
-# ============================================================
-# 14. RUN CONFIDENCE ADAPTIVE
-# ============================================================
-
-print("\n")
-print("=" * 110)
-print(
-    "RUNNING CONFIDENCE-ADAPTIVE i-MedRAG"
-)
-print("=" * 110)
-
-adaptive_result = run_adaptive_benchmark(
-    
-    dataset=medqa_batch,
-
-    medrag_runner=adaptive_medrag,
-
-    config_name="confidence",
-
-    use_planner=False,
-
-    use_planner_budget=False,
-
-    use_coverage=False,
-
-    use_novelty=True,
-
-    use_options_in_gate=True,
-
-    gate_features=[
-        "confidence",
-        "answerable",
-        "discrimination"
-    ],
-
-    query_budget_mode="confidence",
-
-    max_iterations=
-        ADAPTIVE_MAX_ITERATIONS,
-
-    initial_queries=
-        ADAPTIVE_INITIAL_QUERIES,
-
-    confidence_threshold=
-        CONFIDENCE_THRESHOLD,
-
-    k=K
-)
-
-
-# ============================================================
-# 15. QUESTION-LEVEL COMPARISON
-# ============================================================
-
-# question_comparison = (
-#     build_question_comparison(
-
-#         standard_result,
-
-#         adaptive_result
-#     )
-# )
-
-
-# ============================================================
-# 16. SUMMARY COMPARISON
-# ============================================================
-
-# summary_comparison = (
-#     build_summary_comparison(
-
-#         standard_result,
-
-#         adaptive_result
-#     )
-# )
-
-
-# ============================================================
-# 17. PRINT COMPARISON
-# ============================================================
-
-# print_summary_comparison(
-
-#     standard_result,
-
-#     adaptive_result
-# )
-
-# print_question_outcomes(
-#     question_comparison
-# )
-
-
-# # ============================================================
-# # 18. EXTRA COUNTS
-# # ============================================================
-
-# adaptive_improved = sum(
-#     1
-#     for item in question_comparison
-#     if item["adaptive_improved"]
-# )
-
-# adaptive_hurt = sum(
-#     1
-#     for item in question_comparison
-#     if item["adaptive_hurt"]
-# )
-
-# both_correct = sum(
-#     1
-#     for item in question_comparison
-#     if item["both_correct"]
-# )
-
-# both_wrong = sum(
-#     1
-#     for item in question_comparison
-#     if item["both_wrong"]
-# )
-
-
-# ============================================================
-# 19. SAVE EVERYTHING
-# ============================================================
-
-combined_results = {
-
-    # --------------------------------------------------------
-    # Experiment information
-    # --------------------------------------------------------
-
-    "experiment": {
-
-        "stage":
-            "Stage 1",
-
-        "purpose":
-            (
-                "Compare standard i-MedRAG against "
-                "confidence-based adaptive i-MedRAG"
-            ),
-
-        "dataset":
-            "GBaker/MedQA-USMLE-4-options",
-
-        "split":
-            "test",
-
-        "num_questions":
-            NUM_SAMPLES,
-
-        "model":
-            MODEL_NAME,
-
-        "retriever":
+        retriever_name=
             RETRIEVER_NAME,
 
-        "corpus":
+        corpus_name=
             CORPUS_NAME,
 
-        "k":
-            K,
+        corpus_cache=True
+    )
 
-        "standard": {
+    adaptive_medrag.set_stop_rag_controller(
 
-            "rounds":
+        checkpoint_path=
+            STOP_RAG_CHECKPOINT,
+
+        model_name=
+            STOP_RAG_MODEL,
+
+        max_length=
+            STOP_RAG_MAX_LENGTH
+    )
+
+    print(
+        "\n[Stop-RAG Controller] Loaded."
+    )
+
+
+    all_runs = []
+
+    for run_id in range(
+        1,
+        N_RUNS + 1
+    ):
+
+        print("\n")
+        print("=" * 120)
+        print(
+            f"EXPERIMENT RUN "
+            f"{run_id}/{N_RUNS}"
+        )
+        print("=" * 120)
+
+        print(
+            f"Dataset seed: {SEED}"
+        )
+
+        print(
+            f"Questions in this run: "
+            f"{len(medqa_batch)}"
+        )
+
+        try:
+
+            run_result = (
+                run_one_experiment(
+
+                    dataset=medqa_batch,
+
+                    standard_medrag=
+                        standard_medrag,
+
+                    adaptive_medrag=
+                        adaptive_medrag
+                )
+            )
+
+            run_result[
+                "run_id"
+            ] = run_id
+
+            run_result[
+                "dataset_seed"
+            ] = SEED
+
+            all_runs.append(
+                run_result
+            )
+
+
+            checkpoint_data = {
+
+                "experiment_settings": {
+
+                    "num_samples":
+                        NUM_SAMPLES,
+
+                    "n_runs":
+                        N_RUNS,
+
+                    "model":
+                        MODEL_NAME,
+
+                    "retriever":
+                        RETRIEVER_NAME,
+
+                    "corpus":
+                        CORPUS_NAME,
+
+                    "k":
+                        K,
+
+                    "seed":
+                        SEED,
+
+                    "standard_rounds":
+                        STANDARD_ROUNDS,
+
+                    "standard_queries_per_round":
+                        STANDARD_QUERIES_PER_ROUND,
+
+                    "adaptive_max_iterations":
+                        ADAPTIVE_MAX_ITERATIONS,
+
+                    "adaptive_initial_queries":
+                        ADAPTIVE_INITIAL_QUERIES,
+
+                    "confidence_threshold":
+                        CONFIDENCE_THRESHOLD,
+
+                    "stop_rag_checkpoint":
+                        STOP_RAG_CHECKPOINT,
+
+                    "stop_rag_model":
+                        STOP_RAG_MODEL,
+
+                    "stop_rag_max_length":
+                        STOP_RAG_MAX_LENGTH
+                },
+
+                "questions":
+                    medqa_batch,
+
+                "completed_runs":
+                    len(all_runs),
+
+                "runs":
+                    all_runs
+            }
+
+            save_json(
+                checkpoint_data,
+                OUTPUT_FILE
+            )
+
+            print("\n")
+            print(
+                f"[Checkpoint saved] "
+                f"{OUTPUT_FILE}"
+            )
+
+        except Exception as e:
+
+            print("\n")
+            print("=" * 100)
+
+            print(
+                f"RUN {run_id} FAILED"
+            )
+
+            print("=" * 100)
+
+            print(
+                f"Error: {e}"
+            )
+
+            print(
+                "Continuing to next run..."
+            )
+
+
+    if len(all_runs) < 2:
+
+        print("\n")
+        print(
+            "Not enough completed runs "
+            "for statistical testing."
+        )
+
+        raise SystemExit
+
+
+    standard_vs_trained = (
+        analyze_five_runs(
+
+            all_runs,
+
+            baseline_name=
+                "standard",
+
+            proposed_name=
+                "trained_stop_rag"
+        )
+    )
+
+
+    standard_vs_confidence = (
+        analyze_five_runs(
+
+            all_runs,
+
+            baseline_name=
+                "standard",
+
+            proposed_name=
+                "confidence_adaptive"
+        )
+    )
+
+    confidence_vs_trained = (
+        analyze_five_runs(
+
+            all_runs,
+
+            baseline_name=
+                "confidence_adaptive",
+
+            proposed_name=
+                "trained_stop_rag"
+        )
+    )
+
+
+    print("\n")
+    print("=" * 130)
+
+    print(
+        "FINAL STATISTICAL ANALYSIS"
+    )
+
+    print("=" * 130)
+
+    print_statistical_report(
+        standard_vs_trained
+    )
+
+    print_statistical_report(
+        standard_vs_confidence
+    )
+
+    print_statistical_report(
+        confidence_vs_trained
+    )
+
+
+    final_output = {
+
+        "experiment_settings": {
+
+            "num_samples":
+                NUM_SAMPLES,
+
+            "n_runs":
+                N_RUNS,
+
+            "model":
+                MODEL_NAME,
+
+            "retriever":
+                RETRIEVER_NAME,
+
+            "corpus":
+                CORPUS_NAME,
+
+            "k":
+                K,
+
+            "seed":
+                SEED,
+
+            "standard_rounds":
                 STANDARD_ROUNDS,
 
-            "queries_per_round":
+            "standard_queries_per_round":
                 STANDARD_QUERIES_PER_ROUND,
 
-            "queries_per_question":
-                (
-                    STANDARD_ROUNDS
-                    *
-                    STANDARD_QUERIES_PER_ROUND
-                )
-        },
-
-        "adaptive": {
-
-            "max_iterations":
+            "adaptive_max_iterations":
                 ADAPTIVE_MAX_ITERATIONS,
 
-            "initial_queries":
+            "adaptive_initial_queries":
                 ADAPTIVE_INITIAL_QUERIES,
 
             "confidence_threshold":
                 CONFIDENCE_THRESHOLD,
 
-            "use_planner":
-                False,
+            "stop_rag_checkpoint":
+                STOP_RAG_CHECKPOINT,
 
-            "use_coverage":
-                False,
+            "stop_rag_model":
+                STOP_RAG_MODEL,
 
-            "use_novelty":
-                False,
+            "stop_rag_max_length":
+                STOP_RAG_MAX_LENGTH
+        },
 
-            "options_in_gate":
-                True,
+        "questions":
+            medqa_batch,
 
-            "gate_features": [
-                "confidence",
-                "answerable",
-                "discrimination"
-            ]
+        "completed_runs":
+            len(all_runs),
+
+        "runs":
+            all_runs,
+
+        "statistics": {
+
+            "standard_vs_trained":
+                standard_vs_trained,
+
+            "standard_vs_confidence":
+                standard_vs_confidence,
+
+            "confidence_vs_trained":
+                confidence_vs_trained
         }
-    },
+    }
 
-    # --------------------------------------------------------
-    # Full outputs
-    # --------------------------------------------------------
-
-    # "standard":
-    #     standard_result,
-
-    "confidence_adaptive":
-        adaptive_result,
-
-    # --------------------------------------------------------
-    # Aggregate comparison
-    # --------------------------------------------------------
-
-    # "summary_comparison":
-    #     summary_comparison,
-
-    # # # --------------------------------------------------------
-    # # # Question comparison
-    # # # --------------------------------------------------------
-
-    # "question_comparison":
-    #     question_comparison,
-
-    # # --------------------------------------------------------
-    # # Outcome counts
-    # # --------------------------------------------------------
-
-    # "outcomes": {
-
-    #     "adaptive_improved":
-    #         adaptive_improved,
-
-    #     "adaptive_hurt":
-    #         adaptive_hurt,
-
-    #     "both_correct":
-    #         both_correct,
-
-    #     "both_wrong":
-    #         both_wrong
-    # }
-}
-
-
-# ============================================================
-# 20. SAVE JSON
-# ============================================================
-
-OUTPUT_FILE = (
-    "stage1_standard_vs_confidence_20q_novelty.json"
-)
-
-with open(
-    OUTPUT_FILE,
-    "w",
-    encoding="utf-8"
-) as f:
-
-    json.dump(
-        combined_results,
-        f,
-        indent=4,
-        ensure_ascii=False
+    save_json(
+        final_output,
+        OUTPUT_FILE
     )
 
+    print("\n")
+    print("=" * 130)
 
-# ============================================================
-# 21. FINAL SUMMARY
-# ============================================================
+    print(
+        "FINAL RESULTS SAVED"
+    )
 
-print("\n")
-print("=" * 110)
-print("FINAL STAGE 1 RESULT")
-print("=" * 110)
+    print("=" * 130)
 
-# print(
-#     f"Standard accuracy: "
-#     f"{standard_result['accuracy']:.2f}%"
-# )
+    print(
+        f"File: {OUTPUT_FILE}"
+    )
 
-print(
-    f"Adaptive accuracy: "
-    f"{adaptive_result['accuracy']:.2f}%"
-)
+    print(
+        f"Completed runs: "
+        f"{len(all_runs)}/{N_RUNS}"
+    )
 
-print()
-
-# print(
-#     f"Standard avg queries: "
-#     f"{standard_result['avg_queries']:.2f}"
-# )
-
-print(
-    f"Adaptive avg queries: "
-    f"{adaptive_result['avg_queries']:.2f}"
-)
-
-print()
-
-# print(
-#     f"Standard avg LLM calls: "
-#     f"{standard_result['avg_llm_calls']:.2f}"
-# )
-
-print(
-    f"Adaptive avg LLM calls: "
-    f"{adaptive_result['avg_llm_calls']:.2f}"
-)
-
-print()
-
-# print(
-#     f"Standard avg total tokens: "
-#     f"{standard_result['avg_total_tokens']:.2f}"
-# )
-
-print(
-    f"Adaptive avg total tokens: "
-    f"{adaptive_result['avg_total_tokens']:.2f}"
-)
-
-print()
-
-# print(
-#     f"Standard avg latency: "
-#     f"{standard_result['avg_latency_seconds']:.2f}s"
-# )
-
-print(
-    f"Adaptive avg latency: "
-    f"{adaptive_result['avg_latency_seconds']:.2f}s"
-)
-
-print()
-
-# print(
-#     f"Adaptive improved: "
-#     f"{adaptive_improved}"
-# )
-
-# print(
-#     f"Adaptive hurt: "
-#     f"{adaptive_hurt}"
-# )
-
-# print(
-#     f"Both correct: "
-#     f"{both_correct}"
-# )
-
-# print(
-#     f"Both wrong: "
-#     f"{both_wrong}"
-# )
-
-print()
-
-print(
-    f"Results saved to: "
-    f"{OUTPUT_FILE}"
-)
-
-print("=" * 110)
+    print("=" * 130)
